@@ -87,6 +87,9 @@ do {
         }
         if action == "photos" { client.fetchPhotos = true }
         if action == "download" { client.fetchPhotos = true; client.downloadPhotos = true }
+        // json: machine-readable mode for the menu-bar app (overrides the handlers
+        // above with EVENT-line output + a stdin command loop).
+        if action == "json" { JsonDriver.attach(client, photoDir: "/tmp/phonehub-photos") }
         // The phone only arms its Nearby "secure_channel" listener while a Better
         // Together BLE weave channel is live, so run `bleweave` concurrently first
         // (scripts/phonehub.sh does this). RFCOMM channel is resolved via SDP.

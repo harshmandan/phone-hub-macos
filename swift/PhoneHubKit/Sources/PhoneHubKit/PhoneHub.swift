@@ -134,9 +134,16 @@ public enum PhoneHub {
 
     public struct Snapshot {
         public let isUpdate: Bool
-        public let status: String     // battery / signal / carrier summary
+        public let status: String     // battery / signal / carrier summary (for logs)
         public let notifications: [Note]
         public let removedIds: [Int64]
+        // Structured fields (for a UI).
+        public let battery: Int?
+        public let charging: Bool
+        public let signalBars: Int?   // 0…4
+        public let carrier: String
+        public let androidVersion: Int?
+        public let cameraRollGranted: Bool
     }
 
     /// Notification { id=1, origin_app=3(App{package_name=1, visible_name=2}),
@@ -177,7 +184,11 @@ public enum PhoneHub {
             }
         }
         return Snapshot(isUpdate: type == phoneStatusUpdate, status: status,
-                        notifications: notes, removedIds: removedIds)
+                        notifications: notes, removedIds: removedIds,
+                        battery: p.varint(1).map { Int($0) }, charging: (p.varint(2) ?? 0) != 0,
+                        signalBars: p.varint(5).map { Int($0) }, carrier: carrier,
+                        androidVersion: p.varint(13).map { Int($0) },
+                        cameraRollGranted: p.varint(15) == 1)
     }
 
     // MARK: incoming camera roll
