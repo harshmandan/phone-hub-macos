@@ -55,6 +55,11 @@ public final class BleRadio: NSObject {
 
     /// Called with each fully-reassembled secure-channel message.
     public var onMessage: ((Data) -> Void)?
+    /// Called once, when the D2D secure channel authenticates. The phone starts
+    /// its Nearby Connections "secure_channel" listener while this BLE channel is
+    /// up, so this is the moment to open the Phone Hub NC connection.
+    public var onAuthenticated: (() -> Void)?
+    private var firedAuthenticated = false
 
     public init(remoteSeeds: [Eid.BeaconSeed],
                 ourLongTermPrivatePem: String,
@@ -247,6 +252,7 @@ extension BleRadio: CBPeripheralDelegate {
                 context = handshake.context
                 sendMessage(auth, feature: WireMessage.authFeature, label: "[Initiator Auth]")
                 log("🔑 D2D secure channel established")
+                if !firedAuthenticated { firedAuthenticated = true; onAuthenticated?() }
                 // Request features and retry until one answers. Phone Hub is
                 // attestation-walled; Instant Tethering (magic_tether) is not.
                 requestFeatures()

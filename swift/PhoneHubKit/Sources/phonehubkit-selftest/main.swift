@@ -79,10 +79,61 @@ do {
         radio.onMessage = { print("  [ble] app payload \($0.count)B: \($0.prefix(80).hex)") }
         radio.run(seconds: secs)
     } else if args.count >= 3 && args[1] == "phonehub" {
-        // phonehub <phone-mac> [rfcomm-channel=13] [seconds=60]
-        let channel = args.count >= 4 ? (Int(args[3]) ?? 13) : 13
-        let secs = args.count >= 5 ? (Double(args[4]) ?? 60) : 60
-        PhoneHubClient().run(mac: args[2], channelID: channel, seconds: secs)
+        // phonehub <phone-mac> [seconds=90] [identity.json] [action]
+        //   action: ring | dismiss | reply:<text>  (acted on the first snapshot)
+        // Holds a BLE weave channel open (which arms the phone's Nearby "secure_
+        // channel" listener), then opens the Phone Hub Nearby Connections channel:
+        // NC UKEY2 (client) → secure_channel D2D auth → phone_hub status+notifications.
+        let secs = args.count >= 4 ? (Double(args[3]) ?? 90) : 90
+        let idPath = args.count >= 5 ? args[4] : "../../probe/phone_identity.json"
+        let action = args.count >= 6 ? args[5] : ""
+        guard let idData = FileManager.default.contents(atPath: idPath),
+              let idj = try? JSONSerialization.jsonObject(with: idData) as? [String: Any],
+              let phonePubB64 = idj["handshakePubKeyB64"] as? String,
+              let phonePubRaw = Data(base64Encoded: phonePubB64) else {
+            print("could not load phone handshake pubkey from \(idPath)"); exit(1)
+        }
+        var seeds: [Eid.BeaconSeed] = []
+        if let arr = idj["beaconSeeds"] as? [[String: Any]] {
+            for s in arr where (s["dataHex"] as? String) != nil {
+                seeds.append(Eid.BeaconSeed(data: Data(hex: s["dataHex"] as! String),
+                                            startTimeMs: (s["startMs"] as? NSNumber)?.int64Value ?? 0,
+                                            endTimeMs: (s["endMs"] as? NSNumber)?.int64Value ?? 0))
+            }
+        }
+        if seeds.isEmpty { print("no phone beacon seeds at \(idPath)"); exit(1) }
+        let keysPath = (idPath as NSString).deletingLastPathComponent + "/device_keys.json"
+        guard let kData = FileManager.default.contents(atPath: keysPath),
+              let kj = try? JSONSerialization.jsonObject(with: kData) as? [String: Any],
+              let keys = kj["keys"] as? [String: Any],
+              let bt = keys["DeviceSync:BetterTogether"] as? [String: Any],
+              let pem = bt["privatePem"] as? String else {
+            print("could not load our device key from \(keysPath)"); exit(1)
+        }
+        _ = seeds  // (seeds are used by the concurrent bleweave arming this; see scripts/phonehub.sh)
+        let client: PhoneHubClient
+        do {
+            client = try PhoneHubClient(ourLongTermPrivatePem: pem, phoneLongTermPublicGeneric: phonePubRaw)
+        } catch { print("PhoneHubClient init failed: \(error)"); exit(1) }
+
+        // Act on the first status snapshot if an action was requested.
+        var acted = false
+        client.onSnapshot = { snap in
+            guard !acted, !action.isEmpty else { return }
+            acted = true
+            if action == "ring" {
+                print("  [phonehub] → ringing the phone"); client.sendPhoneHub(PhoneHub.ringDevice(on: true), label: "RingDeviceRequest")
+            } else if action == "dismiss", let n = snap.notifications.first {
+                print("  [phonehub] → dismissing notification id=\(n.id)"); client.sendPhoneHub(PhoneHub.dismissNotification(id: n.id), label: "DismissNotification")
+            } else if action.hasPrefix("reply:"), let n = snap.notifications.first(where: { $0.canReply }) {
+                let text = String(action.dropFirst("reply:".count))
+                print("  [phonehub] → replying \"\(text)\" to id=\(n.id) [\(n.app)]"); client.sendPhoneHub(PhoneHub.inlineReply(id: n.id, text: text), label: "InlineReply")
+            } else { print("  [phonehub] no target for action '\(action)'") }
+        }
+        // The phone only arms its Nearby "secure_channel" listener while a Better
+        // Together BLE weave channel is live, so run `bleweave` concurrently first
+        // (scripts/phonehub.sh does this). RFCOMM channel is resolved via SDP.
+        client.run(mac: args[2], channelID: 10, seconds: secs)
     } else if args.count >= 3 && args[1] == "sdp" {
         // sdp <phone-mac> [uuid-substring]  — browse the phone's BT services.
         let want = args.count >= 4 ? args[3] : "a384bd4f"  // "secure_channel" Nearby UUID
