@@ -30,8 +30,8 @@ public enum Tether {
         return Data("{\"type\":\(type),\"data\":\"\(data)\"}".utf8)
     }
 
-    public static func availabilityRequest_() -> Data { wrap(type: availabilityRequest) }
-    public static func connectRequest_() -> Data { wrap(type: connectRequest) }
+    public static func makeAvailabilityRequest() -> Data { wrap(type: availabilityRequest) }
+    public static func makeConnectRequest() -> Data { wrap(type: connectRequest) }
     public static func keepAlive() -> Data { wrap(type: keepAliveTickle) }
 
     private static func b64urlDecode(_ s: String) -> Data {

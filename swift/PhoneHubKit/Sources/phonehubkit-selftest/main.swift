@@ -41,40 +41,13 @@ do {
         // FE50 EID, connect to the b3b7e28e weave GATT, run uWeave.
         let secs = args.count >= 3 ? (Double(args[2]) ?? 120) : 120
         let idPath = args.count >= 4 ? args[3] : "../../probe/phone_identity.json"
-        var seeds: [Eid.BeaconSeed] = []
-        if let data = FileManager.default.contents(atPath: idPath),
-           let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let arr = j["beaconSeeds"] as? [[String: Any]] {
-            for s in arr {
-                if let hex = s["dataHex"] as? String,
-                   let start = (s["startMs"] as? NSNumber)?.int64Value,
-                   let end = (s["endMs"] as? NSNumber)?.int64Value {
-                    seeds.append(Eid.BeaconSeed(data: Data(hex: hex), startTimeMs: start, endTimeMs: end))
-                }
-            }
-        }
-        if seeds.isEmpty { print("no phone beacon seeds at \(idPath)"); exit(1) }
-        // Phone's long-term public key (generic-public-key bytes from its
-        // decrypted metadata) and our long-term device private key PEM
-        // (device_keys.json) — the D2D auth inputs (parsed inside BleRadio).
-        guard let idData = FileManager.default.contents(atPath: idPath),
-              let idj = try? JSONSerialization.jsonObject(with: idData) as? [String: Any],
-              let phonePubB64 = idj["handshakePubKeyB64"] as? String,
-              let phonePubRaw = Data(base64Encoded: phonePubB64) else {
-            print("could not load phone handshake pubkey from \(idPath)"); exit(1)
-        }
-        let keysPath = (idPath as NSString).deletingLastPathComponent + "/device_keys.json"
-        guard let kData = FileManager.default.contents(atPath: keysPath),
-              let kj = try? JSONSerialization.jsonObject(with: kData) as? [String: Any],
-              let keys = kj["keys"] as? [String: Any],
-              let bt = keys["DeviceSync:BetterTogether"] as? [String: Any],
-              let pem = bt["privatePem"] as? String else {
-            print("could not load our device key from \(keysPath)"); exit(1)
-        }
+        let id: PhoneIdentity
+        do { id = try PhoneIdentity.load(idPath) } catch { print(error); exit(1) }
+        if id.seeds.isEmpty { print("no phone beacon seeds at \(idPath)"); exit(1) }
         let radio: BleRadio
         do {
-            radio = try BleRadio(remoteSeeds: seeds, ourLongTermPrivatePem: pem,
-                                 phoneLongTermPublicGeneric: phonePubRaw)
+            radio = try BleRadio(remoteSeeds: id.seeds, ourLongTermPrivatePem: id.ourPrivatePem,
+                                 phoneLongTermPublicGeneric: id.phonePublicGeneric)
         } catch { print("BleRadio init failed: \(error)"); exit(1) }
         radio.onMessage = { print("  [ble] app payload \($0.count)B: \($0.prefix(80).hex)") }
         radio.run(seconds: secs)
@@ -87,33 +60,12 @@ do {
         let secs = args.count >= 4 ? (Double(args[3]) ?? 90) : 90
         let idPath = args.count >= 5 ? args[4] : "../../probe/phone_identity.json"
         let action = args.count >= 6 ? args[5] : ""
-        guard let idData = FileManager.default.contents(atPath: idPath),
-              let idj = try? JSONSerialization.jsonObject(with: idData) as? [String: Any],
-              let phonePubB64 = idj["handshakePubKeyB64"] as? String,
-              let phonePubRaw = Data(base64Encoded: phonePubB64) else {
-            print("could not load phone handshake pubkey from \(idPath)"); exit(1)
-        }
-        var seeds: [Eid.BeaconSeed] = []
-        if let arr = idj["beaconSeeds"] as? [[String: Any]] {
-            for s in arr where (s["dataHex"] as? String) != nil {
-                seeds.append(Eid.BeaconSeed(data: Data(hex: s["dataHex"] as! String),
-                                            startTimeMs: (s["startMs"] as? NSNumber)?.int64Value ?? 0,
-                                            endTimeMs: (s["endMs"] as? NSNumber)?.int64Value ?? 0))
-            }
-        }
-        if seeds.isEmpty { print("no phone beacon seeds at \(idPath)"); exit(1) }
-        let keysPath = (idPath as NSString).deletingLastPathComponent + "/device_keys.json"
-        guard let kData = FileManager.default.contents(atPath: keysPath),
-              let kj = try? JSONSerialization.jsonObject(with: kData) as? [String: Any],
-              let keys = kj["keys"] as? [String: Any],
-              let bt = keys["DeviceSync:BetterTogether"] as? [String: Any],
-              let pem = bt["privatePem"] as? String else {
-            print("could not load our device key from \(keysPath)"); exit(1)
-        }
-        _ = seeds  // (seeds are used by the concurrent bleweave arming this; see scripts/phonehub.sh)
+        let id: PhoneIdentity
+        do { id = try PhoneIdentity.load(idPath) } catch { print(error); exit(1) }
         let client: PhoneHubClient
         do {
-            client = try PhoneHubClient(ourLongTermPrivatePem: pem, phoneLongTermPublicGeneric: phonePubRaw)
+            client = try PhoneHubClient(ourLongTermPrivatePem: id.ourPrivatePem,
+                                        phoneLongTermPublicGeneric: id.phonePublicGeneric)
         } catch { print("PhoneHubClient init failed: \(error)"); exit(1) }
 
         // Act on the first status snapshot if an action was requested.
@@ -146,20 +98,7 @@ do {
     } else if args.count >= 2 && args[1] == "scan" {
         let secs = args.count >= 3 ? (Double(args[2]) ?? 15) : 15
         let idPath = args.count >= 4 ? args[3] : "../../probe/phone_identity.json"
-        var seeds: [Eid.BeaconSeed] = []
-        var label = ""
-        if let data = FileManager.default.contents(atPath: idPath),
-           let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let arr = j["beaconSeeds"] as? [[String: Any]] {
-            label = (j["name"] as? String) ?? "phone"
-            for s in arr {
-                if let hex = s["dataHex"] as? String,
-                   let start = (s["startMs"] as? NSNumber)?.int64Value,
-                   let end = (s["endMs"] as? NSNumber)?.int64Value {
-                    seeds.append(Eid.BeaconSeed(data: Data(hex: hex), startTimeMs: start, endTimeMs: end))
-                }
-            }
-        }
+        let (seeds, label) = PhoneIdentity.loadSeeds(idPath)
         Scanner(targetSeeds: seeds, targetLabel: label).run(seconds: secs)
     } else if args.count == 4 && args[1] == "diag" {
         print(try await Enrollment.diag(email: args[2], masterToken: args[3]))
