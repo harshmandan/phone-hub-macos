@@ -71,6 +71,7 @@ public enum NearbyBt {
 public final class RfcommFrameChannel: NSObject, FrameChannel, IOBluetoothRFCOMMChannelDelegate {
     private let channel: IOBluetoothRFCOMMChannel
     private var inBuffer = Data()
+    private var readPos = 0                        // cursor into inBuffer (avoids O(n) removeFirst)
     private var pending: [(Data?) -> Void] = []   // FIFO receiveFrame callbacks
     private let lock = NSLock()
     private var closed = false
@@ -90,14 +91,22 @@ public final class RfcommFrameChannel: NSObject, FrameChannel, IOBluetoothRFCOMM
         let mtu = Int(channel.getMTU())
         let total = out.count
         let chunk = mtu > 0 ? mtu : total
+        var ok = true
         out.withUnsafeMutableBytes { (raw: UnsafeMutableRawBufferPointer) in
-            guard let base = raw.baseAddress else { return }
+            guard let base = raw.baseAddress else { ok = false; return }
             var off = 0
             while off < total {
                 let n = min(chunk, total - off)
-                _ = channel.writeSync(base + off, length: UInt16(n))
+                if channel.writeSync(base + off, length: UInt16(n)) != kIOReturnSuccess { ok = false; break }
                 off += n
             }
+        }
+        guard ok else {
+            // Write failed mid-frame (channel dropped) — the stream is now
+            // desynced; mark closed and fail outstanding reads instead of lying.
+            lock.lock(); closed = true; let cbs = pending; pending.removeAll(); lock.unlock()
+            cbs.forEach { $0(nil) }
+            return
         }
         completion?()
     }
@@ -113,12 +122,19 @@ public final class RfcommFrameChannel: NSObject, FrameChannel, IOBluetoothRFCOMM
     private func drain() {
         while true {
             lock.lock()
-            guard !pending.isEmpty, inBuffer.count >= 4 else { lock.unlock(); return }
-            let h = [UInt8](inBuffer.prefix(4))
-            let n = Int(UInt32(h[0]) << 24 | UInt32(h[1]) << 16 | UInt32(h[2]) << 8 | UInt32(h[3]))
-            guard inBuffer.count >= 4 + n else { lock.unlock(); return }
-            let frame = Data(inBuffer.dropFirst(4).prefix(n))
-            inBuffer.removeFirst(4 + n)
+            let s = inBuffer.startIndex
+            let avail = inBuffer.count - readPos
+            guard !pending.isEmpty, avail >= 4 else { lock.unlock(); return }
+            let base = s + readPos
+            let n = Int(UInt32(inBuffer[base]) << 24 | UInt32(inBuffer[base + 1]) << 16
+                        | UInt32(inBuffer[base + 2]) << 8 | UInt32(inBuffer[base + 3]))
+            guard avail >= 4 + n else { lock.unlock(); return }
+            let frame = Data(inBuffer[(base + 4)..<(base + 4 + n)])
+            readPos += 4 + n
+            // Compact occasionally instead of on every frame: fully drained → clear;
+            // otherwise once the consumed prefix is large.
+            if readPos == inBuffer.count { inBuffer.removeAll(keepingCapacity: true); readPos = 0 }
+            else if readPos > 1 << 16 { inBuffer.removeSubrange(s..<(s + readPos)); readPos = 0 }
             let cb = pending.removeFirst()
             lock.unlock()
             cb(frame)
@@ -131,7 +147,7 @@ public final class RfcommFrameChannel: NSObject, FrameChannel, IOBluetoothRFCOMM
         if dataLength > 0 {
             let chunk = Data(bytes: dataPointer, count: dataLength)
             print("  rfcomm rx \(dataLength)B: \(chunk.prefix(64).map { String(format: "%02x", $0) }.joined())")
-            inBuffer.append(chunk)
+            lock.lock(); inBuffer.append(chunk); lock.unlock()
         }
         drain()
     }

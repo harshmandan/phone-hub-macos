@@ -49,7 +49,6 @@ public final class BleRadio: NSObject {
     // messageProcessor registered"). Retry on a timer until a phone_hub reply
     // arrives — this is what ChromeOS's CrosStateSender does.
     private var crosStateTimer: Timer?
-    private var gotPhoneHub = false
     private var gotTether = false
     private var sentConnect = false
 
@@ -124,7 +123,7 @@ public final class BleRadio: NSObject {
         guard let ctx = context else { return }
         sendMessage(ctx.encode(PhoneHub.crosState()), feature: PhoneHub.feature,
                     label: "CrosState (phone_hub, attestation-walled)")
-        sendMessage(ctx.encode(Tether.availabilityRequest_()), feature: Tether.feature,
+        sendMessage(ctx.encode(Tether.makeAvailabilityRequest()), feature: Tether.feature,
                     label: "TetherAvailabilityRequest (magic_tether)")
     }
 
@@ -132,6 +131,23 @@ public final class BleRadio: NSObject {
         if let error { log("write error: \(error.localizedDescription)") }
         writing = false
         pump()
+    }
+
+    /// Clear all per-connection handshake state so a reconnect re-runs the full
+    /// uWeave + D2D handshake from scratch (without this, `helloSent`/`context`/
+    /// `writing`/the weave receiver stay stale and the new channel is dead).
+    private func resetSession() {
+        crosStateTimer?.invalidate(); crosStateTimer = nil
+        helloSent = false
+        writing = false
+        writeQueue.removeAll()
+        context = nil
+        firedAuthenticated = false
+        gotTether = false
+        sentConnect = false
+        receiver = Weave.PacketReceiver()
+        generator = Weave.PacketGenerator()
+        tx = nil
     }
 }
 
@@ -171,13 +187,15 @@ extension BleRadio: CBCentralManagerDelegate {
     public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         log("didFailToConnect: \(error?.localizedDescription ?? "?") — rescanning")
         self.peripheral = nil
+        resetSession()
         central.scanForPeripherals(withServices: nil,
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
     }
 
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         log("disconnected: \(error?.localizedDescription ?? "clean"); rescanning")
-        self.peripheral = nil; self.tx = nil
+        self.peripheral = nil
+        resetSession()
         central.scanForPeripherals(withServices: nil,
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
     }
@@ -280,14 +298,13 @@ extension BleRadio: CBPeripheralDelegate {
                 if t.type == Tether.availabilityResponse, t.available, !sentConnect, let ctx = context {
                     sentConnect = true
                     log("→ requesting hotspot (ConnectTetheringRequest) …")
-                    sendMessage(ctx.encode(Tether.connectRequest_()), feature: Tether.feature,
+                    sendMessage(ctx.encode(Tether.makeConnectRequest()), feature: Tether.feature,
                                 label: "ConnectTetheringRequest")
                 }
                 if t.type == Tether.connectResponse, let ssid = t.ssid, let pw = t.password {
                     log("🛜  HOTSPOT READY  →  SSID: \(ssid)   PASSWORD: \(pw)")
                 }
             } else if feature == PhoneHub.feature {
-                gotPhoneHub = true
                 log("📱 \(PhoneHub.describe(payload))")
             } else {
                 log("🔓 [\(feature)] \(payload.count)B: \(payload.prefix(64).hex)")

@@ -43,13 +43,14 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
     // Nearby BYTES payload reassembly + outgoing id.
     private var pending: [Int64: Data] = [:]
     private var payloadId: Int64 = Int64.random(in: 1...Int64.max)
+    // Cap total in-flight reassembly so a payload whose last chunk never arrives
+    // (or a hostile stream) can't exhaust memory. A camera-roll photo is a few MB.
+    private let maxReassembly = 64 * 1024 * 1024
 
     // Phone Hub registers its processor shortly AFTER auth, so a lone CrosState
     // can race it; retry on a timer until a phone_hub reply arrives.
     private var crosStateTimer: Timer?
     private var gotPhoneHub = false
-    private var gotTether = false
-    private var sentConnect = false
 
     enum State { case connecting, sentClientInit, deriving, secure }
     private var state: State = .connecting
@@ -191,10 +192,20 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
     private func receiveLoop() {
         fc?.receiveFrame { [weak self] data in
             guard let self else { return }
-            guard let data else { self.log("connection closed"); return }
+            guard let data else { self.log("connection closed"); self.teardown(); return }
             do { try self.process(data) } catch { self.log("error: \(error)") }
             self.receiveLoop()
         }
+    }
+
+    /// Release per-connection state on close so a dead channel stops the retry
+    /// timer and frees reassembly buffers.
+    private func teardown() {
+        crosStateTimer?.invalidate(); crosStateTimer = nil
+        fc = nil
+        pending.removeAll()
+        pendingFiles.removeAll()
+        state = .connecting
     }
 
     private func process(_ data: Data) throws {
@@ -240,9 +251,14 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
             do { plain = try n.decode(data) } catch {
                 log("← non-decryptable \(data.count)B (\(error))"); return
             }
-            let t = NearbyFrames.frameType(plain)
-            if t == NearbyFrames.framePayloadTransfer, let (id, body, last) = NearbyFrames.payloadBody(plain) {
+            // payloadBody returns nil for non-PayloadTransfer frames, so try it
+            // first and only parse the frame type for the other branches.
+            if let (id, body, last) = NearbyFrames.payloadBody(plain) {
                 pending[id, default: Data()] += body
+                if (pending[id]?.count ?? 0) > maxReassembly {
+                    log("payload \(id) exceeded reassembly cap — dropping")
+                    pending[id] = nil; pendingFiles[id] = nil; return
+                }
                 guard last else { return }
                 let full = pending.removeValue(forKey: id) ?? Data()
                 if let photo = pendingFiles.removeValue(forKey: id) {
@@ -250,10 +266,10 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
                 } else if !full.isEmpty {
                     handleSecureChannel(full)
                 }
-            } else if t == NearbyFrames.frameKeepAlive {
+            } else if NearbyFrames.frameType(plain) == NearbyFrames.frameKeepAlive {
                 fc?.sendFrame(n.encode(NearbyFrames.keepAlive(ack: true, seq: 0)))
             } else {
-                log("← 🔓 frame type \(t.map(String.init) ?? "?") (\(plain.count)B)")
+                log("← 🔓 frame type \(NearbyFrames.frameType(plain).map(String.init) ?? "?") (\(plain.count)B)")
             }
         }
     }
@@ -314,7 +330,6 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
                     }
                 }
             } else if feature == Tether.feature {
-                gotTether = true
                 log("📡 \(Tether.parse(payload).summary)")
             } else {
                 log("🔓 [\(feature)] \(payload.count)B: \(payload.prefix(64).hex)")
