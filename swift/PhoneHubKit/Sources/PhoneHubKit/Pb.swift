@@ -38,7 +38,7 @@ enum Pb {
 
     /// Decode top-level fields. Varints and length-delimited only (all we use).
     static func readFields(_ input: Data) -> [Int: PBField] {
-        let data = Data(input)  // rebase indices to 0
+        let data = input   // index-relative throughout; no copy needed
         var out: [Int: PBField] = [:]
         var i = data.startIndex
 
@@ -63,8 +63,10 @@ enum Pb {
             if wire == 0 {
                 out[field] = .varint(readVarint())
             } else if wire == 2 {
-                let len = Int(readVarint())
-                guard len >= 0, data.distance(from: i, to: data.endIndex) >= len else { break }
+                let lv = readVarint()
+                guard lv <= UInt64(Int.max) else { break }   // reject absurd length
+                let len = Int(lv)
+                guard data.distance(from: i, to: data.endIndex) >= len else { break }
                 let end = data.index(i, offsetBy: len)
                 out[field] = .bytes(Data(data[i..<end]))
                 i = end
@@ -90,7 +92,7 @@ enum Pb {
     /// (e.g. PhoneStatusSnapshot.notifications), which `readFields` would collapse
     /// to the last one.
     static func readRepeatedBytes(_ input: Data, _ field: Int) -> [Data] {
-        let data = Data(input)
+        let data = input
         var out: [Data] = []
         var i = data.startIndex
         func readVarint() -> UInt64 {
@@ -108,8 +110,10 @@ enum Pb {
             let f = Int(key >> 3), wire = Int(key & 7)
             if wire == 0 { _ = readVarint() }
             else if wire == 2 {
-                let len = Int(readVarint())
-                guard len >= 0, data.distance(from: i, to: data.endIndex) >= len else { break }
+                let lv = readVarint()
+                guard lv <= UInt64(Int.max) else { break }
+                let len = Int(lv)
+                guard data.distance(from: i, to: data.endIndex) >= len else { break }
                 let end = data.index(i, offsetBy: len)
                 if f == field { out.append(Data(data[i..<end])) }
                 i = end

@@ -22,6 +22,7 @@ enum SecureMessage {
     // MARK: GenericPublicKey
 
     static func javaBigInt(_ coord: Data) -> Data {
+        guard !coord.isEmpty else { return Data([0]) }
         var bytes = Array(coord)
         var start = 0
         while start < bytes.count - 1 && bytes[start] == 0 { start += 1 }
@@ -76,7 +77,10 @@ enum SecureMessage {
 
     // MARK: AES-256-CBC (CommonCrypto; CryptoKit has no CBC)
 
-    private static func aesCbc(encrypt: Bool, key: Data, iv: Data, data: Data) -> Data {
+    private static func aesCbc(encrypt: Bool, key: Data, iv: Data, data: Data) throws -> Data {
+        guard iv.count == kCCBlockSizeAES128 else {
+            throw SecureMessageError(message: "AES-CBC bad IV length \(iv.count)")
+        }
         var out = Data(count: data.count + kCCBlockSizeAES128)
         let outCount = out.count
         var moved = 0
@@ -94,7 +98,12 @@ enum SecureMessage {
                 }
             }
         }
-        precondition(status == kCCSuccess, "AES-CBC failed")
+        // Encrypt with valid key/iv never fails; decrypt can fail on bad
+        // ciphertext/padding from a malformed or adversarial frame — throw (never
+        // crash the process) so the caller can drop the frame.
+        guard status == kCCSuccess else {
+            throw SecureMessageError(message: "AES-CBC \(encrypt ? "encrypt" : "decrypt") failed: \(status)")
+        }
         out.removeSubrange(moved..<out.count)
         return out
     }
@@ -115,7 +124,8 @@ enum SecureMessage {
             let encKey = hkdf(key, Data("ENC:2".utf8))
             var iv = Data(count: 16)
             iv.withUnsafeMutableBytes { _ = SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
-            body = aesCbc(encrypt: true, key: encKey, iv: iv, data: payload)
+            // Encrypt with a valid 32-byte key + 16-byte IV + PKCS7 cannot fail.
+            body = (try? aesCbc(encrypt: true, key: encKey, iv: iv, data: payload)) ?? Data()
             header += Pb.bytes(5, iv)          // iv = field 5 (before metadata, as the phone sends)
         } else {
             body = payload                      // NONE: body is the plaintext
@@ -147,15 +157,20 @@ enum SecureMessage {
             throw SecureMessageError(message: "malformed SecureMessage")
         }
         let sigKey = hkdf(key, Data("SIG:1".utf8))
-        let expected = Data(HMAC<SHA256>.authenticationCode(for: headerAndBody, using: SymmetricKey(data: sigKey)))
-        guard expected == signature else { throw SecureMessageError(message: "bad signature") }
+        // Constant-time MAC verification (avoids a timing side-channel).
+        guard HMAC<SHA256>.isValidAuthenticationCode(signature, authenticating: headerAndBody,
+                                                      using: SymmetricKey(data: sigKey)) else {
+            throw SecureMessageError(message: "bad signature")
+        }
 
         let hab = Pb.readFields(headerAndBody)
         let header = Pb.readFields(hab.bytes(1) ?? Data())
         let body = hab.bytes(2) ?? Data()
+        // Honor the encryption scheme (field 2): NONE means the body is plaintext.
+        if header.varint(2) == encNone { return (body, header.bytes(6) ?? Data()) }
         let encKey = hkdf(key, Data("ENC:2".utf8))
         let iv = header.bytes(5) ?? Data()
-        let payload = aesCbc(encrypt: false, key: encKey, iv: iv, data: body)
+        let payload = try aesCbc(encrypt: false, key: encKey, iv: iv, data: body)
         return (payload, header.bytes(6) ?? Data())
     }
 

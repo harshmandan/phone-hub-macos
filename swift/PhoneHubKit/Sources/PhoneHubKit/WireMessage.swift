@@ -18,7 +18,16 @@ enum WireMessage {
     static func serialize(payload: Data, feature: String) -> Data {
         let json = "{\"payload\":\"\(payload.base64url)\",\"feature\":\"\(feature)\"}"
         let body = Data(json.utf8)
-        var out = Data([versionThree, UInt8((body.count >> 8) & 0xff), UInt8(body.count & 0xff)])
+        let n = body.count
+        var out: Data
+        if n <= 0xFFFF {
+            out = Data([versionThree, UInt8((n >> 8) & 0xff), UInt8(n & 0xff)])
+        } else {
+            // Version 4: 4-byte big-endian length, for bodies that overflow 16 bits
+            // (base64-inflated JSON of a large message).
+            out = Data([versionFour, UInt8((n >> 24) & 0xff), UInt8((n >> 16) & 0xff),
+                        UInt8((n >> 8) & 0xff), UInt8(n & 0xff)])
+        }
         out += body
         return out
     }

@@ -101,11 +101,19 @@ public enum D2D {
                                         publicMetadata: gcmMetadata(gcmTypeMessage), encrypt: true)
         }
 
-        /// Decrypt an incoming SecureMessage to the inner feature payload.
+        /// Decrypt an incoming SecureMessage to the inner feature payload, checking
+        /// the DeviceToDeviceMessage sequence number (field 2) for replay/ordering.
+        /// A mismatch is logged and the counter resynced rather than thrown, so a
+        /// benign gap doesn't drop a live message.
         public func decode(_ secureMessage: Data) throws -> Data {
             let (payload, _) = try SecureMessage.unwrap(key: decodeKey, secureMessage: secureMessage)
+            let fields = Pb.readFields(payload)
             decodeSeq += 1
-            return Pb.readFields(payload).bytes(1) ?? Data()   // DeviceToDeviceMessage.message
+            if let seq = fields.varint(2), seq != decodeSeq {
+                print("  [d2d] sequence mismatch: expected \(decodeSeq), got \(seq) — resyncing")
+                decodeSeq = seq
+            }
+            return fields.bytes(1) ?? Data()   // DeviceToDeviceMessage.message
         }
     }
 }
