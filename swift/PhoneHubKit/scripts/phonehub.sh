@@ -7,7 +7,8 @@
 # background, waits for it to authenticate, then opens the Phone Hub NC channel.
 #
 # Usage: phonehub.sh <phone-bt-mac> [seconds=90] [action]
-#   action: ring | dismiss | reply:<text>   (acted on the first status snapshot)
+#   action: photos | ring | dismiss | reply:<text>  (acted on the first snapshot)
+#     photos  — fetch recent camera-roll items; thumbnails saved to /tmp/phonehub-photos
 # Example: phonehub.sh 00:00:00:00:00:00 90 reply:on my way
 set -e
 cd "$(dirname "$0")/.."

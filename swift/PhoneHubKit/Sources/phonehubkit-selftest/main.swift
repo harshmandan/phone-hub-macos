@@ -119,10 +119,13 @@ do {
         // Act on the first status snapshot if an action was requested.
         var acted = false
         client.onSnapshot = { snap in
-            guard !acted, !action.isEmpty else { return }
+            // "photos"/"download" are handled via client flags, not snapshot actions.
+            guard !acted, !action.isEmpty, action != "photos", action != "download" else { return }
             acted = true
             if action == "ring" {
                 print("  [phonehub] → ringing the phone"); client.sendPhoneHub(PhoneHub.ringDevice(on: true), label: "RingDeviceRequest")
+            } else if action == "camerasetup" {
+                print("  [phonehub] → requesting camera-roll setup (grant on the phone)"); client.sendPhoneHub(PhoneHub.featureSetup(cameraRoll: true), label: "FeatureSetupRequest")
             } else if action == "dismiss", let n = snap.notifications.first {
                 print("  [phonehub] → dismissing notification id=\(n.id)"); client.sendPhoneHub(PhoneHub.dismissNotification(id: n.id), label: "DismissNotification")
             } else if action.hasPrefix("reply:"), let n = snap.notifications.first(where: { $0.canReply }) {
@@ -130,6 +133,8 @@ do {
                 print("  [phonehub] → replying \"\(text)\" to id=\(n.id) [\(n.app)]"); client.sendPhoneHub(PhoneHub.inlineReply(id: n.id, text: text), label: "InlineReply")
             } else { print("  [phonehub] no target for action '\(action)'") }
         }
+        if action == "photos" { client.fetchPhotos = true }
+        if action == "download" { client.fetchPhotos = true; client.downloadPhotos = true }
         // The phone only arms its Nearby "secure_channel" listener while a Better
         // Together BLE weave channel is live, so run `bleweave` concurrently first
         // (scripts/phonehub.sh does this). RFCOMM channel is resolved via SDP.

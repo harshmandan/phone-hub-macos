@@ -27,9 +27,11 @@ def main():
                     "deviceId": our_id, "deviceIdToken": our_token},
         "deviceFeatureStatuses": [
             {"deviceId": phone_id, "featureStatuses": [
-                {"featureType": "PHONE_HUB_HOST", "enabled": True, "enableExclusively": False}]},
+                {"featureType": "PHONE_HUB_HOST", "enabled": True, "enableExclusively": False},
+                {"featureType": "PHONE_HUB_CAMERA_ROLL_HOST", "enabled": True, "enableExclusively": False}]},
             {"deviceId": our_id, "featureStatuses": [
-                {"featureType": "PHONE_HUB_CLIENT", "enabled": True, "enableExclusively": False}]},
+                {"featureType": "PHONE_HUB_CLIENT", "enabled": True, "enableExclusively": False},
+                {"featureType": "PHONE_HUB_CAMERA_ROLL_CLIENT", "enabled": True, "enableExclusively": False}]},
         ],
     }
     code, text = post(BATCH_SET, token, body)

@@ -58,6 +58,17 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
     /// Called with each decoded Phone Hub status snapshot/update (battery, signal,
     /// notifications). Lets a caller act on it — e.g. reply to a notification.
     public var onSnapshot: ((PhoneHub.Snapshot) -> Void)?
+    /// Called with the phone's recent camera-roll items (metadata + thumbnails).
+    public var onPhotos: (([PhoneHub.Photo]) -> Void)?
+    /// When true, enable camera_roll in CrosState and fetch recent photos after the
+    /// first status snapshot; thumbnails are written to `photoDir`.
+    public var fetchPhotos = false
+    /// When true (implies fetchPhotos), also download the full-resolution files.
+    public var downloadPhotos = false
+    public var photoDir = "/tmp/phonehub-photos"
+    private var sentPhotoFetch = false
+    private var photoByKey: [String: PhoneHub.Photo] = [:]
+    private var pendingFiles: [Int64: PhoneHub.Photo] = [:]   // Nearby payload id → photo
 
     /// D2D auth inputs: our long-term device private key (DeviceSync:BetterTogether
     /// PEM) + the phone's long-term public key (generic-public-key bytes from its
@@ -234,7 +245,11 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
                 pending[id, default: Data()] += body
                 guard last else { return }
                 let full = pending.removeValue(forKey: id) ?? Data()
-                if !full.isEmpty { handleSecureChannel(full) }
+                if let photo = pendingFiles.removeValue(forKey: id) {
+                    writeFullPhoto(photo, data: full)   // a camera-roll FILE payload
+                } else if !full.isEmpty {
+                    handleSecureChannel(full)
+                }
             } else if t == NearbyFrames.frameKeepAlive {
                 fc?.sendFrame(n.encode(NearbyFrames.keepAlive(ack: true, seq: 0)))
             } else {
@@ -270,10 +285,34 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
         do {
             let payload = try ctx!.decode(message)
             if feature == PhoneHub.feature {
-                gotPhoneHub = true
-                crosStateTimer?.invalidate()
-                log("📱 PHONE HUB over Nearby ✅\n\(PhoneHub.describe(payload))")
-                if let snap = PhoneHub.parse(payload) { onSnapshot?(snap) }
+                switch PhoneHub.messageType(payload) {
+                case PhoneHub.fetchCameraRollItemsResponse:
+                    let photos = PhoneHub.parseCameraRoll(payload)
+                    for p in photos { photoByKey[p.key] = p }
+                    log("📷 CAMERA ROLL: \(photos.count) recent item(s)")
+                    savePhotos(photos)
+                    onPhotos?(photos)
+                    if downloadPhotos {
+                        for p in photos { sendPhoneHub(PhoneHub.fetchCameraRollItemData(p), label: "FetchItemData \(p.fileName)") }
+                    }
+                case PhoneHub.fetchCameraRollItemDataResponse:
+                    if let r = PhoneHub.parseCameraRollItemData(payload), r.available, let photo = photoByKey[r.key] {
+                        pendingFiles[r.payloadId] = photo
+                        log("   ⬇︎ \(photo.fileName): payload \(r.payloadId) available — initiating transfer")
+                        sendPhoneHub(PhoneHub.initiateCameraRollTransfer(photo, payloadId: r.payloadId), label: "InitiateTransfer")
+                    }
+                default:
+                    gotPhoneHub = true
+                    crosStateTimer?.invalidate()
+                    log("📱 PHONE HUB over Nearby ✅\n\(PhoneHub.describe(payload))")
+                    if let snap = PhoneHub.parse(payload) {
+                        onSnapshot?(snap)
+                        if fetchPhotos, !sentPhotoFetch {
+                            sentPhotoFetch = true
+                            sendPhoneHub(PhoneHub.fetchCameraRollItems(max: 12), label: "FetchCameraRollItems")
+                        }
+                    }
+                }
             } else if feature == Tether.feature {
                 gotTether = true
                 log("📡 \(Tether.parse(payload).summary)")
@@ -286,7 +325,30 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
     private func requestFeatures() {
         guard let ctx else { return }
-        sendSecure(ctx.encode(PhoneHub.crosState()), feature: PhoneHub.feature, label: "CrosState (phone_hub)")
+        sendSecure(ctx.encode(PhoneHub.crosState(cameraRoll: fetchPhotos)), feature: PhoneHub.feature, label: "CrosState (phone_hub)")
+    }
+
+    /// Write each thumbnail to `photoDir` and log the item.
+    private func savePhotos(_ photos: [PhoneHub.Photo]) {
+        try? FileManager.default.createDirectory(atPath: photoDir, withIntermediateDirectories: true)
+        for p in photos {
+            let info = "\(p.fileName.isEmpty ? p.key : p.fileName)  \(p.mime)  \(p.sizeBytes / 1024)KB"
+            guard let data = p.thumbnail, !data.isEmpty else { log("   🖼  \(info) (no thumbnail)"); continue }
+            let base = ((p.fileName.isEmpty ? p.key : p.fileName) as NSString).deletingPathExtension
+            let safe = base.isEmpty ? "photo-\(abs(p.key.hashValue))" : base.replacingOccurrences(of: "/", with: "_")
+            let path = "\(photoDir)/\(safe).thumb.\(p.thumbIsPng ? "png" : "jpg")"
+            do { try data.write(to: URL(fileURLWithPath: path)); log("   🖼  \(info) → \(path)") }
+            catch { log("   🖼  \(info) (save failed: \(error))") }
+        }
+    }
+
+    /// Write a downloaded full-resolution camera-roll file to `photoDir`.
+    private func writeFullPhoto(_ p: PhoneHub.Photo, data: Data) {
+        try? FileManager.default.createDirectory(atPath: photoDir, withIntermediateDirectories: true)
+        let name = p.fileName.isEmpty ? "photo-\(abs(p.key.hashValue))" : p.fileName.replacingOccurrences(of: "/", with: "_")
+        let path = "\(photoDir)/\(name)"
+        do { try data.write(to: URL(fileURLWithPath: path)); log("   ✅ downloaded \(data.count / 1024)KB → \(path)") }
+        catch { log("   full-photo save failed: \(error)") }
     }
 
     /// Send a Phone Hub request (e.g. PhoneHub.dismissNotification / inlineReply /
