@@ -8,18 +8,16 @@ Non-exclusive, so it leaves magic_tether / easy_unlock untouched.
 
 Usage: ./enable_phonehub.py <email> <master_token> <phone_device_id>
 """
-import json, sys
-import gpsoauth
-from probe_auth import ANDROID_ID, GMS_PACKAGE, GMS_SIG, CRYPTAUTH_SCOPE
-from link import post, BATCH_SET, GROUP
+import sys
+from link import BATCH_SET, GROUP
+from probe_common import cryptauth_token, load_keys, post
 
 
 def main():
     email, master, phone_id = sys.argv[1], sys.argv[2], sys.argv[3]
-    ks = json.load(open("device_keys.json"))
+    ks = load_keys()
     our_id, our_token = ks["instanceId"], ks["gcmToken"]
-    token = gpsoauth.perform_oauth(email, master, ANDROID_ID, service=CRYPTAUTH_SCOPE,
-                                   app=GMS_PACKAGE, client_sig=GMS_SIG).get("Auth")
+    token = cryptauth_token(email, master)
     if not token:
         print("no cryptauth token"); sys.exit(1)
     body = {

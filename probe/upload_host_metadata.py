@@ -20,12 +20,10 @@ import os
 import sys
 import time
 
-import gpsoauth
-
 import pb
 import securemessage as sm
-from device_sync import post, SYNC_METADATA, BETTER_TOGETHER_GROUP
-from probe_auth import ANDROID_ID, GMS_PACKAGE, GMS_SIG, CRYPTAUTH_SCOPE
+from device_sync import SYNC_METADATA, BETTER_TOGETHER_GROUP
+from probe_common import cryptauth_token, load_keys, post
 
 MAC_BT_ADDRESS = "AA:BB:CC:DD:EE:FF"
 SEED_WINDOW_MS = 14 * 24 * 60 * 60 * 1000  # 14 days, matching the phone's seeds
@@ -54,15 +52,26 @@ def beacon_seed(seed: dict) -> bytes:
             + pb.varint(3, seed["endMs"]))
 
 
-def metadata(ks: dict, seeds: list) -> bytes:
+def metadata(ks: dict, seeds: list, attestation: bytes = None) -> bytes:
     # BetterTogetherDeviceMetadata: public_key(1), no_pii_device_name(2),
-    # beacon_seeds(3, repeated), bluetooth_public_address(4).
+    # beacon_seeds(3, repeated), bluetooth_public_address(4), attestation_data(5).
     device_pub = base64.b64decode(ks["keys"]["DeviceSync:BetterTogether"]["keyMaterial"])
     out = pb.bytes_(1, device_pub) + pb.string(2, "Chromebook")
     for s in seeds:
         out += pb.message(3, beacon_seed(s))
     out += pb.string(4, MAC_BT_ADDRESS)
+    if attestation is not None:
+        out += pb.message(5, attestation)
     return out
+
+
+def sync_metadata_body(ks: dict, enc: bytes, group_pub_b64: str) -> dict:
+    return {"context": {"group": BETTER_TOGETHER_GROUP,
+                        "clientMetadata": {"invocationReason": "FEATURE_TOGGLED"},
+                        "deviceId": ks["instanceId"], "deviceIdToken": ks["gcmToken"]},
+            "groupPublicKey": group_pub_b64,
+            "encryptedMetadata": base64.b64encode(enc).decode(),
+            "needGroupPrivateKey": False}
 
 
 def main() -> None:
@@ -70,24 +79,18 @@ def main() -> None:
         print(__doc__)
         sys.exit(1)
     email, master = sys.argv[1], sys.argv[2]
-    ks = json.load(open("device_keys.json"))
+    ks = load_keys()
     group_pub_b64 = ks["groupKey"]["publicGeneric"]
     group_pub = sm._parse_generic_public_key(base64.b64decode(group_pub_b64))
 
-    token = gpsoauth.perform_oauth(email, master, ANDROID_ID, service=CRYPTAUTH_SCOPE,
-                                   app=GMS_PACKAGE, client_sig=GMS_SIG).get("Auth")
+    token = cryptauth_token(email, master)
     if not token:
         print("no cryptauth token")
         sys.exit(1)
 
     seeds = get_or_make_seeds(ks)
     enc = sm.encrypt(metadata(ks, seeds), group_pub)
-    body = {"context": {"group": BETTER_TOGETHER_GROUP,
-                        "clientMetadata": {"invocationReason": "FEATURE_TOGGLED"},
-                        "deviceId": ks["instanceId"], "deviceIdToken": ks["gcmToken"]},
-            "groupPublicKey": group_pub_b64,
-            "encryptedMetadata": base64.b64encode(enc).decode(),
-            "needGroupPrivateKey": False}
+    body = sync_metadata_body(ks, enc, group_pub_b64)
     code, text = post(SYNC_METADATA, token, body)
     print("syncMetadata HTTP", code)
     if code != 200:
