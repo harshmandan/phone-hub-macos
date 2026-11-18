@@ -8,12 +8,16 @@
 #
 # Usage: phonehub.sh <phone-bt-mac> [seconds=90] [action]
 #   action: photos | ring | dismiss | reply:<text>  (acted on the first snapshot)
-#     photos  — fetch recent camera-roll items; thumbnails saved to /tmp/phonehub-photos
+#     photos  — fetch recent camera-roll items; thumbnails saved (owner-only) to
+#               ~/Library/Application Support/PhoneHub/photos
 # Example: phonehub.sh 00:00:00:00:00:00 90 reply:on my way
 set -e
 cd "$(dirname "$0")/.."
 PLIST="$PWD/Info.plist"
-swift build -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$PLIST" || exit 1
+# Build ONLY the CLI target — the SwiftUI app target needs Xcode's toolchain, so a
+# bare `swift build` under Command Line Tools fails on the SwiftUI macro plugin.
+swift build --target phonehubkit-selftest \
+  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$PLIST" || exit 1
 BIN=.build/debug/phonehubkit-selftest
 
 MAC="${1:?usage: phonehub.sh <phone-bt-mac> [seconds] [action]}"
@@ -22,7 +26,9 @@ ACTION="${3:-}"
 ID="../../probe/phone_identity.json"
 
 # Hold a BLE weave channel open the whole time (arms the phone's NC listener).
-"$BIN" bleweave "$((SECS + 25))" "$ID" > /tmp/phonehub-bleweave.log 2>&1 &
+# Arm only — do NOT let the arming weave channel turn on the phone's hotspot
+# (it reconfigures Wi-Fi and drops Wi-Fi adb / links mid-session).
+PHONEHUB_ARM_ONLY=1 "$BIN" bleweave "$((SECS + 25))" "$ID" > /tmp/phonehub-bleweave.log 2>&1 &
 BLE_PID=$!
 trap 'kill $BLE_PID 2>/dev/null' EXIT
 
