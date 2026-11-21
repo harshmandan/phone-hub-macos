@@ -71,10 +71,11 @@ final class PhoneHubEngine: ObservableObject {
             ?? ".build/debug/phonehubkit-selftest"
     }
 
-    private func launch(_ args: [String], onLine: @escaping (String) -> Void) -> (Process, FileHandle)? {
+    private func launch(_ args: [String], env: [String: String]? = nil, onLine: @escaping (String) -> Void) -> (Process, FileHandle)? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: binary())
         p.arguments = args
+        if let env { p.environment = ProcessInfo.processInfo.environment.merging(env) { _, new in new } }
         let out = Pipe(); let inp = Pipe()
         p.standardOutput = out; p.standardError = out; p.standardInput = inp
         out.fileHandleForReading.readabilityHandler = { [weak self] h in
@@ -100,7 +101,9 @@ final class PhoneHubEngine: ObservableObject {
     }
 
     private func startArm() {
-        guard let (p, _) = launch(["bleweave", "600", config.identityPath], onLine: { [weak self] line in
+        guard let (p, _) = launch(["bleweave", "600", config.identityPath],
+                                  env: ["PHONEHUB_ARM_ONLY": "1"],  // don't turn on the hotspot
+                                  onLine: { [weak self] line in
             self?.onArmLine(line)
         }) else { return }
         arm = p
