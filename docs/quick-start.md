@@ -192,3 +192,59 @@ needs the ChromeOS-side setup UI/OOBE that a non-ChromeOS device can't present.
 Everything up to and including a live encrypted channel with the phone works.
 The one thing that doesn't is making the phone *start* the Phone Hub / Quick Start
 link, because that is the Chromebook's job and the phone exposes no entry for it.
+
+## "What is a real Chromebook" — the wall, re-examined from Chrome source
+
+Read `chrome/browser/ash/login/oobe_quick_start/` + `chromeos/ash/services/device_sync/`
+in Chromium main. "Real Chromebook" splits into three separable identities:
+
+1. **To CryptAuth (server enrollment):** `device_type=CHROME` + metadata. Software only.
+   `cryptauth_v2_enroller_impl.cc` proves identity by a key-proof (ECDSA over the
+   server's random_session_id) — no TPM, no attestation. We fake it; server accepts. ✅
+
+2. **To the phone (Phone Hub / Better Together setup):** software key-proofs + an auth
+   token (`multidevice_setup.mojom`). No hardware attestation anywhere in the OSS path.
+   We ran Nearby + UKEY2 + the D2D channel live. ✅
+
+3. **Quick Start ACCOUNT TRANSFER (OOBE only):** the one hard hardware gate.
+   `second_device_auth_broker.cc` → `FetchAttestationCertificate` with
+   `PROFILE_DEVICE_SETUP_CERTIFICATE` / `kDeviceSetupKey`; the TPM/Cr50-rooted cert
+   (subject `O=Chrome Device Setup`) is base64'd into the Gaia `/v1/startsession`
+   body and verified SERVER-SIDE by Google's Privacy CA. A Mac cannot produce it. ❌
+   **But Phone Hub does not use this step** — it's only for onboarding a new Chromebook
+   and copying the Google account onto it.
+
+### The actual missing piece: the Fast Pair trigger beacon
+
+`connectivity/fast_pair_advertiser.cc`: the phone's "Set up this Chromebook" prompt is
+triggered by a **BLE Fast Pair broadcast**, NOT by the Nearby Connections advertising:
+- Service UUID `0000fe2c-…` (0xFE2C Fast Pair).
+- Service data = 3-byte model id; Chromebook = `{0x30,0x68,0x46}` (0x306846, confirmed).
+  (Chromebase `e9316c`, Chromebox `dade43`.)
+- Manufacturer data: company id `0x00e0` (Google) + the 16-byte random advertising_id.
+
+`target_device_connection_broker_impl.cc` starts Fast Pair FIRST, then Nearby
+Connections — beacon = trigger, NC = channel. We only ever broadcast the NC channel.
+No same-account/server-push trigger exists in the OSS code; the trigger is purely local
+BLE. (Phone-side scan/notify logic is in GMS, closed.)
+
+### Why the Mac can't emit it, and what fixes it
+
+Apple's CoreBluetooth advertising (`CBPeripheralManager.startAdvertising`) supports only
+`CBAdvertisementDataLocalNameKey` + `CBAdvertisementDataServiceUUIDsKey`; it silently
+drops service-data and manufacturer-data. So the Mac's own radio cannot put
+`FE2C + 30 68 46 + Google mfr data` on air. This is an Apple API limit, not a hardware
+root-of-trust wall.
+
+Fix left to try: an external BLE board (nRF52840 / ESP32, ~$10–40) flashed to broadcast
+that exact beacon, running next to the Mac while the Mac serves the NC channel + the
+proven handshake. The beacon wakes the phone; the Mac answers.
+
+### Revised conclusion
+
+The earlier "need real ChromeOS hardware" ceiling was aimed at Quick Start account
+transfer (door 3) — the one gated step, which Phone Hub never uses. For Phone Hub
+itself there is NO hardware gate in open source. The single unbroken step is emitting
+the FE2C/0x306846 trigger beacon, which the Mac's API blocks but a cheap external BLE
+beacon can supply. Unknown (closed GMS): whether the phone will accept a non-OOBE Mac
+as a Better Together host once prompted.
