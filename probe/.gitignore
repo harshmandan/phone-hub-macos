@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+*.token
+# never commit account secrets
+secrets.txt
+tokens.txt
