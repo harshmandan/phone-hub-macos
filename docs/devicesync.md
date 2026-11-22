@@ -14,10 +14,10 @@ enrolled.
 
 ## What group membership needs (the next build chunk)
 
-1. **Real GCM registration.** `device_id` must be a real InstanceID and
-   `device_id_token` the matching GCM token. Our current GCM step fails with
-   `PHONE_REGISTRATION_ERROR` because the check-in is a Chrome-browser check-in;
-   a real Android/GMS check-in + InstanceID register is needed.
+1. **Real GCM registration.** ✅ Done. `get_gcm_token.py` now does a real
+   Android check-in (synthetic device profile) then registers
+   com.google.android.gms, and returns a valid InstanceID token. The old
+   `PHONE_REGISTRATION_ERROR` was from checking in as a Chrome browser.
 2. **Enroll the `DeviceSync:BetterTogether` key bundle.** We only enrolled the
    user `PublicKey` bundle. The group uses a separate device key
    (`kCryptAuthDeviceSyncBetterTogetherKeyName`). syncKeys/enrollKeys must run
