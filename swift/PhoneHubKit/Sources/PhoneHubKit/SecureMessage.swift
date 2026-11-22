@@ -24,7 +24,12 @@ enum SecureMessage {
     }
 
     static func genericPublicKey(_ pub: P256.KeyAgreement.PublicKey) -> Data {
-        let raw = pub.rawRepresentation  // 64 bytes: x || y
+        genericPublicKey(rawXY: pub.rawRepresentation)
+    }
+
+    /// Build a GenericPublicKey from a raw 64-byte x||y (works for signing or
+    /// key-agreement public keys, which share the representation).
+    static func genericPublicKey(rawXY raw: Data) -> Data {
         let x = javaBigInt(raw.prefix(32))
         let y = javaBigInt(raw.suffix(32))
         let ecP256 = Pb.bytes(1, x) + Pb.bytes(2, y)

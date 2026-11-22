@@ -66,6 +66,15 @@ enum Pb {
                 let end = data.index(i, offsetBy: len)
                 out[field] = .bytes(Data(data[i..<end]))
                 i = end
+            } else if wire == 1 {  // 64-bit (fixed64) — little-endian
+                var v: UInt64 = 0
+                for shift in stride(from: 0, through: 56, by: 8) {
+                    v |= UInt64(data[i]) << shift
+                    i = data.index(after: i)
+                }
+                out[field] = .varint(v)
+            } else if wire == 5 {  // 32-bit
+                i = data.index(i, offsetBy: 4)
             } else {
                 break
             }
