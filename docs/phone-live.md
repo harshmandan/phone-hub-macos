@@ -86,3 +86,12 @@ published (because it is not linked). This empirically closes the loop: the phon
 is not advertising for Phone Hub, and we cannot get it there without a real
 Chromebook-initiated, proximity-verified setup. `FEF3` is confirmed as a live
 Google cross-device advertising service (the scaffold's guessed service UUID).
+
+## BLE advertise attempt (conclusive dead end)
+
+Ran the Mac as a BLE advertiser ("eve", Better Together service UUID, TX/RX GATT)
+for 2 minutes next to the phone, poking the phone's linking screen. **Nothing
+connected** — no central subscribed, no writes. Confirms the two walls: macOS
+CoreBluetooth drops the service data where the EID must go, and the phone does
+not scan for a bare Chromebook beacon. The real Chromebook-initiated path is the
+QR Quick Start flow over Nearby Connections (docs/quick-start.md), not raw BLE.
