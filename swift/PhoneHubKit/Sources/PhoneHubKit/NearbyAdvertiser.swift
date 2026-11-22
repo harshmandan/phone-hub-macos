@@ -14,7 +14,7 @@ public final class NearbyAdvertiser: NSObject {
     // Device types (EndpointInfo): unknown=0, phone=1, tablet=2, laptop=3.
     static let deviceTypeLaptop = 3
     public static let quickShareServiceType = "_FC9F5ED42C8A._tcp."
-    static let quickShareServiceIdHash: [UInt8] = [0xFC, 0x9F, 0x5E]
+    public static let quickShareServiceIdHash: [UInt8] = [0xFC, 0x9F, 0x5E]
 
     private var listener: NWListener!
     private var service: NetService?
