@@ -51,11 +51,22 @@ def _master_key(private: ec.EllipticCurvePrivateKey,
 
 
 def encrypt(payload: bytes, group_pub: ec.EllipticCurvePublicKey) -> bytes:
-    """Serialize a SecureMessage encrypting `payload` to `group_pub`."""
+    """Serialize a SecureMessage encrypting `payload` to `group_pub` (ECIES)."""
     session = ec.generate_private_key(ec.SECP256R1())
     master = _master_key(session, group_pub)
-    enc_key = _hkdf(master, b"ENC:2")
-    sig_key = _hkdf(master, b"SIG:1")
+    return create(master, payload,
+                  decryption_key_id=generic_public_key(session.public_key()))
+
+
+def create(key: bytes, payload: bytes, public_metadata: bytes = b"",
+           decryption_key_id: bytes = b"") -> bytes:
+    """A SecureMessage encrypted+signed with one symmetric master `key`.
+
+    Matches SecureMessageDelegate.CreateSecureMessage when the same key signs and
+    encrypts (so no plaintext tag). enc/sig keys are derived from `key`.
+    """
+    enc_key = _hkdf(key, b"ENC:2")
+    sig_key = _hkdf(key, b"SIG:1")
 
     iv = os.urandom(16)
     padder = PKCS7(128).padder()
@@ -63,16 +74,34 @@ def encrypt(payload: bytes, group_pub: ec.EllipticCurvePublicKey) -> bytes:
     enc = Cipher(algorithms.AES(enc_key), modes.CBC(iv)).encryptor()
     body = enc.update(padded) + enc.finalize()
 
-    # signing_key == encryption_key, so no plaintext tag is needed.
-    header = (
-        pb.varint(1, SIG_HMAC_SHA256)
-        + pb.varint(2, ENC_AES_256_CBC)
-        + pb.bytes_(4, generic_public_key(session.public_key()))  # decryption_key_id
-        + pb.bytes_(7, iv)
-    )
+    header = pb.varint(1, SIG_HMAC_SHA256) + pb.varint(2, ENC_AES_256_CBC)
+    if decryption_key_id:
+        header += pb.bytes_(4, decryption_key_id)
+    if public_metadata:
+        header += pb.bytes_(5, public_metadata)
+    header += pb.bytes_(7, iv)
+
     header_and_body = pb.bytes_(1, header) + pb.bytes_(2, body)
     signature = hmac.new(sig_key, header_and_body, hashlib.sha256).digest()
     return pb.bytes_(1, header_and_body) + pb.bytes_(2, signature)
+
+
+def unwrap(key: bytes, secure_message: bytes) -> tuple[bytes, bytes]:
+    """Verify + decrypt a symmetric SecureMessage. Returns (payload, public_metadata)."""
+    sm = _read_fields(secure_message)
+    header_and_body, signature = sm[1], sm[2]
+    sig_key = _hkdf(key, b"SIG:1")
+    expected = hmac.new(sig_key, header_and_body, hashlib.sha256).digest()
+    if not hmac.compare_digest(expected, signature):
+        raise ValueError("bad SecureMessage signature")
+    hab = _read_fields(header_and_body)
+    header, body = _read_fields(hab[1]), hab[2]
+    enc_key = _hkdf(key, b"ENC:2")
+    dec = Cipher(algorithms.AES(enc_key), modes.CBC(header[7])).decryptor()
+    padded = dec.update(body) + dec.finalize()
+    unpadder = PKCS7(128).unpadder()
+    payload = unpadder.update(padded) + unpadder.finalize()
+    return payload, header.get(5, b"")
 
 
 # -- decrypt, for the round-trip self-test only --

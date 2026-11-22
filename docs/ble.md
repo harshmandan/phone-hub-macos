@@ -29,8 +29,12 @@ Mapped from `chromeos/ash/services/secure_channel`.
 - ✅ **EID discovery** (`probe/ble/eid.py`) — the rotating-ID derivation and
   matching. Done, unit-tested against the Chromium algorithm.
 - ⬜ **uWeave framing** — packetization. Pure byte-format work.
-- ⬜ **Device-to-device authenticator** — the handshake. Reuses
-  `securemessage.py`; testable with a local initiator+responder round-trip.
+- 🔨 **Device-to-device authenticator** — the encrypted channel it produces is
+  built and tested (`probe/ble/session_keys.py`, `secure_context.py`): session
+  key = SHA256(ECDH of ephemeral keys), split into initiator/responder AES keys
+  via HKDF, then each message is a symmetric SecureMessage with a sequence
+  number. Round-trip + replay tests pass. The identity-proof part of the
+  handshake is specified below but needs a phone to exercise.
 - ⬜ **Beacon seeds in metadata** — generate seeds and include them in the
   DeviceSync `BetterTogetherDeviceMetadata` (currently left empty).
 
@@ -38,6 +42,25 @@ Mapped from `chromeos/ash/services/secure_channel`.
 - ⬜ The BLE radio: advertising, scanning, GATT connect. macOS does this through
   CoreBluetooth, so this layer is Swift, not Python.
 - ⬜ End-to-end testing against a real phone on the same account.
+
+## The authenticator handshake (spec — needs a phone)
+
+The channel above assumes an agreed root key. Establishing it, and proving each
+side's identity, is a 3-message exchange (securegcm DeviceToDevice), ported as
+spec from `device_to_device_initiator_helper.cc`:
+
+1. **[Hello]** Mac → phone: a signed (not encrypted) SecureMessage whose
+   `public_metadata` is an `InitiatorHello` carrying the Mac's ephemeral session
+   public key. Signed with the persistent symmetric key.
+2. **[ResponderAuth]** phone → Mac: signed + encrypted; embeds the phone's
+   ephemeral session public key (in `decryption_key_id`) and proves the phone's
+   identity with its persistent BetterTogether key. The Mac now computes the
+   root key = SHA256(ECDH(mac_session_private, phone_session_public)).
+3. **[InitiatorAuth]** Mac → phone: the Mac proves itself likewise.
+
+Open item to confirm against a live phone: the exact origin of the "persistent
+symmetric key" used to sign [Hello] (derived from the enrolled keys vs.
+established during pairing).
 
 ## The gating fact
 
