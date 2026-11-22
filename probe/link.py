@@ -21,6 +21,7 @@ from probe_enroll import API_KEY, ANDROID_CERT
 
 HOST = "https://cryptauthdevicesync.googleapis.com"
 BATCH_SET = HOST + "/v1:batchSetFeatureStatuses"
+BATCH_NOTIFY = HOST + "/v1:batchNotifyGroupDevices"
 GROUP = "DeviceSync:BetterTogether"
 
 
@@ -75,12 +76,14 @@ def main():
 
     print("=== batchSetFeatureStatuses (enable host on phone) ===")
     code, text = post(BATCH_SET, token, body)
-    print("HTTP", code)
-    print(text)
+    print("HTTP", code, text[:200])
+    # Note: /v1:batchNotifyGroupDevices (to push the phone to re-sync) 404s on
+    # the public REST gateway, so the phone must pick up the host flag on its own
+    # sync, or linking is finished from the phone's own Chromebook-linking UI.
     if code == 200:
         print()
-        print(">>> Host enable sent. Check the phone — it may show a permission")
-        print(">>> prompt to approve. Then re-run device_sync.py to see if it's linked.")
+        print(">>> Host flag set. The phone should pick this up on its next sync,")
+        print(">>> or finish linking from its Chromebook-linking screen.")
 
 
 if __name__ == "__main__":
