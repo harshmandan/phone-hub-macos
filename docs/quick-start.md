@@ -88,3 +88,18 @@ Start one (different service type + hash — extract from Chromium's
 target_device_connection_broker), and the connection orchestration
 (ConnectionRequest ↔ UKEY2 ↔ ConnectionResponse ↔ Quick Start AES-GCM handshake
 ↔ payloads), all of which reuse the pieces already built and tested here.
+
+## Live bidirectional connection (breakthrough)
+
+With `serve` running, the phone connected over TCP (192.168.1.22) and sent its
+first frame: **273 bytes, type 1 = ConnectionRequest**, which our OfflineFrame
+parser identified correctly. So the full medium stack is proven with real phone
+traffic: Bonjour discovery → TCP connect → 4-byte length-prefix read → Nearby
+OfflineFrame parse.
+
+All the protocol pieces exist and are tested (UKEY2, frames, secure channel,
+Quick Start handshake). What remains is the **orchestration** — the connection
+state machine: receive ConnectionRequest → exchange ConnectionRequest/UKEY2
+(ClientInit/ServerInit/ClientFinished) → ConnectionResponse(accept) → the
+encrypted channel → payloads → the Quick Start AES-GCM handshake → second-device
+auth. This is now live-testable against the phone.
