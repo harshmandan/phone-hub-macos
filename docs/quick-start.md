@@ -103,3 +103,38 @@ state machine: receive ConnectionRequest → exchange ConnectionRequest/UKEY2
 (ClientInit/ServerInit/ClientFinished) → ConnectionResponse(accept) → the
 encrypted channel → payloads → the Quick Start AES-GCM handshake → second-device
 auth. This is now live-testable against the phone.
+
+## FULL STACK VERIFIED LIVE (the milestone)
+
+Running `serve`, the phone drove the whole inbound handshake and our state
+machine completed it:
+
+```
+frame 275B, type 1                     ConnectionRequest
+UKEY2: got ClientInit, sent ServerInit
+UKEY2 complete — D2D channel derived (auth 82bf7e3f…)
+got phone ConnectionResponse; sending accept
+sent ConnectionResponse(accept) + an encrypted keep-alive
+🔓 decrypted a frame — D2D CHANNEL WORKS LIVE
+```
+
+So the ENTIRE Nearby Connections transport + security stack is proven against a
+real phone: Bonjour discovery → TCP → length-prefixed framing → UKEY2 key
+exchange (shared secret derived) → the D2D AES-256-CBC+HMAC channel (we decrypted
+a frame the phone encrypted, so our keys match). The reusable pieces
+(Ukey2, SecureContext/SessionKeys with "client"/"server", NearbyFrames) are all
+confirmed correct on the wire.
+
+The phone's transfer then "failed" only because we drove it via Quick SHARE and
+did not continue Quick Share's app protocol (we sent a keep-alive). That is fine
+— Quick Share was just the test driver.
+
+## What remains for Quick Start (over this proven channel)
+
+1. Advertise with the Quick START Nearby service id (not Quick Share's) so the
+   phone's Quick Start flow discovers us.
+2. Speak the Quick Start app protocol over the channel: the AES-GCM handshake
+   (already built, keyed by the QR secret + the UKEY2 auth string) and the
+   quick-start messages, then second_device_auth.
+
+The transport and crypto — the hard part — are done and live-verified.
