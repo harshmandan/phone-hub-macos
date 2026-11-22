@@ -16,6 +16,9 @@ do {
         let path = args.count >= 3 ? args[2] : "/tmp/quickstart-qr.png"
         print(url)
         print(QrImage.writePNG(url, to: path) ? "QR written: \(path)" : "QR render failed")
+    } else if args.count >= 2 && args[1] == "serve" {
+        let secs = args.count >= 3 ? (Double(args[2]) ?? 120) : 120
+        NearbyAdvertiser(name: Host.current().localizedName ?? "Mac").run(seconds: secs)
     } else if args.count >= 2 && args[1] == "nettest" {
         print(NearbyTransport.loopbackTest() ? "loopback frame transport OK" : "loopback FAILED")
     } else if args.count >= 2 && args[1] == "scan" {
