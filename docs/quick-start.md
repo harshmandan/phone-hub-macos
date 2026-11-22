@@ -38,9 +38,15 @@ mechanism than the BLE Better Together link we were stuck on.
   bigger than Phone Hub, but it is a different thing; whether it then unlocks
   Phone Hub is a further unknown.
 
-## The fork
+## Build progress
 
-Pursuing this means starting a Nearby-Connections-based Quick Start target on
-macOS (QR + the AES-GCM handshake are easy; Nearby Connections is the bulk).
-That is a new, large direction — separate from the (now-exhausted) Better
-Together BLE path.
+- ✅ QR + handshake crypto in Swift (`QuickStart.swift`): advertising id (10B) +
+  shared secret (32B) → the signin.google URL; and BuildHandshakeMessage /
+  VerifyHandshakeMessage (AES-256-GCM over AuthenticationPayload{role,
+  auth_string}, roles target=1 / source=2). Round-trip unit-tested.
+- ✅ `qr` command renders a scannable QR PNG (CoreImage) — to test whether a
+  real phone recognises our Quick Start QR format.
+- ⬜ **Nearby Connections** — the bulk. BLE + Wi-Fi mediums, UKEY2, framing;
+  `auth_string` comes from this session. Best bootstrapped from NearDrop /
+  rquickshare, which already run Nearby Connections on macOS.
+- ⬜ second-device auth / account transfer.

@@ -34,6 +34,8 @@ public enum SelfTest {
         print("ok  EID formula + discovery + look-ahead")
         try weave()
         print("ok  uWeave fragmentation + counter enforcement")
+        try quickStart()
+        print("ok  Quick Start QR + AES-GCM handshake round-trip")
         print("all passed")
     }
 
@@ -98,6 +100,28 @@ public enum SelfTest {
         try check(Eid.matches(advertisementServiceData: adv + Data([0, 1]), remoteSeeds: phone, nowMs: now), "own EID matches")
         try check(!Eid.matches(advertisementServiceData: adv, remoteSeeds: Eid.generateBeaconSeeds(nowMs: now), nowMs: now), "other seeds don't match")
         try check(Eid.nearestEids(phone, nowMs: now).count == 5, "look-ahead count")
+    }
+
+    static func quickStart() throws {
+        let b = QuickStart.newBootstrap()
+        let url = QuickStart.qrURL(b)
+        try check(url.hasPrefix("https://signin.google/qs/") && url.contains("?key="), "QR URL shape")
+        try check(b.advertisingId.count == 10 && b.sharedSecret.count == 32, "bootstrap sizes")
+
+        // handshake round-trip: target builds, verify as the target's message
+        let msg = try QuickStart.buildHandshakeMessage(
+            authString: "auth-token-xyz", secret: b.sharedSecret, role: QuickStart.roleTarget)
+        try check(QuickStart.verifyHandshakeMessage(
+            msg, secret: b.sharedSecret, expectedRole: QuickStart.roleTarget,
+            expectedAuthString: "auth-token-xyz"), "handshake verifies")
+        // wrong secret fails
+        try check(!QuickStart.verifyHandshakeMessage(
+            msg, secret: QuickStart.randomData(32), expectedRole: QuickStart.roleTarget,
+            expectedAuthString: "auth-token-xyz"), "wrong secret rejected")
+        // wrong auth string fails
+        try check(!QuickStart.verifyHandshakeMessage(
+            msg, secret: b.sharedSecret, expectedRole: QuickStart.roleTarget,
+            expectedAuthString: "nope"), "wrong auth string rejected")
     }
 
     static func weave() throws {
