@@ -9,7 +9,8 @@ let package = Package(
         .executable(name: "phonehubkit-selftest", targets: ["phonehubkit-selftest"]),
     ],
     targets: [
-        .target(name: "PhoneHubKit"),
+        .target(name: "PhoneHubKit",
+                linkerSettings: [.linkedFramework("IOBluetooth")]),
         .executableTarget(name: "phonehubkit-selftest", dependencies: ["PhoneHubKit"]),
     ]
 )

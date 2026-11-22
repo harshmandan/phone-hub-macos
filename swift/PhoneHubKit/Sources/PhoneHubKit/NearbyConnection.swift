@@ -11,12 +11,20 @@ import CryptoKit
 public final class NearbyConnection {
     enum State { case initial, gotConnectionRequest, sentServerInit, gotClientFinished, secure }
 
-    private let fc: FrameConnection
+    private let fc: any FrameChannel
     private let ukey = Ukey2.Server()
     private var state: State = .initial
     private var channel: SecureContext?
 
-    public init(_ fc: FrameConnection) { self.fc = fc }
+    /// When set (Quick Start via QR), drive the app layer after the channel is up.
+    private let quickStartSecret: Data?
+    private var authString: Data?
+    private var payloadId: Int64 = 1
+
+    public init(_ fc: any FrameChannel, quickStartSecret: Data? = nil) {
+        self.fc = fc
+        self.quickStartSecret = quickStartSecret
+    }
 
     public func start() {
         fc.start()
@@ -24,6 +32,14 @@ public final class NearbyConnection {
     }
 
     private func log(_ s: String) { print("  [nearby] \(s)") }
+
+    /// Send a Quick Start app-layer message as an encrypted Nearby BYTES payload.
+    private func sendApp(_ body: Data, label: String) {
+        guard let ch = channel else { return }
+        let pid = payloadId; payloadId += 1
+        fc.sendFrame(ch.encode(NearbyFrames.payloadBytes(id: pid, body: body)))
+        log("→ \(label) (\(body.count)B) as payload \(pid)")
+    }
 
     private func receiveLoop() {
         fc.receiveFrame { [weak self] data in
@@ -57,6 +73,7 @@ public final class NearbyConnection {
             let ch = SecureContext(encodeKey: d2dServer, decodeKey: d2dClient)  // we are the server
             ch.lenientSequence = true
             channel = ch
+            authString = derived.authString
             log("UKEY2 complete ✅ — D2D channel derived (auth \(derived.authString.prefix(4).hex)…)")
             state = .gotClientFinished
 
@@ -65,19 +82,43 @@ public final class NearbyConnection {
             // then the channel is encrypted.
             log("got phone ConnectionResponse (\(data.count)B); sending accept")
             fc.sendFrame(NearbyFrames.connectionResponse(accept: true))
-            // prove our encryption works: send an encrypted keep-alive.
-            if let ch = channel {
+            state = .secure
+            if let secret = quickStartSecret, let auth = authString {
+                // Quick Start app layer — Target drives: handshake → bootstrapOptions.
+                // bootstrapOptions makes the phone surface its account picker.
+                do {
+                    let hs = try QuickStart.buildHandshakeMessage(authBytes: auth, secret: secret,
+                                                                  role: QuickStart.roleTarget)
+                    sendApp(hs, label: "handshake")
+                    sendApp(QuickStartMessages.bootstrapOptions(), label: "bootstrapOptions")
+                } catch { log("handshake build failed: \(error)") }
+            } else if let ch = channel {
                 fc.sendFrame(ch.encode(NearbyFrames.keepAlive(ack: false, seq: 1)))
                 log("sent ConnectionResponse(accept) + an encrypted keep-alive")
             }
-            state = .secure
 
         case .secure:
-            // encrypted frames — decrypt with the channel.
+            // encrypted frames — decrypt with the channel. Dump the phone's
+            // app-layer messages (JSON in PayloadTransferFrame BYTES) so a live
+            // run captures exactly what the Quick Start source sends.
             guard let ch = channel else { return }
             let plain = try ch.decode(data)
             let t = NearbyFrames.frameType(plain)
-            log("🔓 decrypted a frame (\(plain.count)B), type \(t.map(String.init) ?? "?") — D2D CHANNEL WORKS LIVE")
+            if t == NearbyFrames.framePayloadTransfer, let (id, body, last) = NearbyFrames.payloadBody(plain) {
+                let txt = String(data: body, encoding: .utf8) ?? "<non-utf8>"
+                log("🔓 app payload id=\(id) \(body.count)B last=\(last)")
+                log("    utf8: \(txt.prefix(500))")
+                log("    hex : \(Data(body.prefix(96)).hex)")
+                if let cfg = QuickStartMessages.parseBootstrapConfigurations(body) {
+                    let email = cfg["email"] as? String
+                    let iid = (cfg["instanceId"] ?? cfg["instance_id"]) as? String
+                    if email != nil || iid != nil {
+                        log("    🎯 bootstrapConfigurations — email=\(email ?? "?") instanceId=\(iid ?? "?")")
+                    }
+                }
+            } else {
+                log("🔓 decrypted frame (\(plain.count)B) type \(t.map(String.init) ?? "?")")
+            }
         }
     }
 }

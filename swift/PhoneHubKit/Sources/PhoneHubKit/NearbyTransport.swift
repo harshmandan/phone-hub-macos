@@ -8,7 +8,24 @@ import Network
 /// This file is the socket + framing foundation. The Bonjour advertising with
 /// the endpoint_info and the full connection state machine (ConnectionRequest ↔
 /// UKEY2 ↔ ConnectionResponse ↔ payloads) layer on top and need the phone.
-public final class FrameConnection {
+/// Transport abstraction: a byte-stream medium carrying 4-byte big-endian
+/// length-prefixed Nearby Connections frames. Wi-Fi LAN (`FrameConnection`) and
+/// Bluetooth Classic (`RfcommFrameChannel`) both conform, so `NearbyConnection`
+/// runs the same state machine over either.
+public protocol FrameChannel: AnyObject {
+    func start()
+    func cancel()
+    func sendFrame(_ frame: Data, completion: (() -> Void)?)
+    func receiveFrame(_ callback: @escaping (Data?) -> Void)
+}
+
+public extension FrameChannel {
+    /// Fire-and-forget send (restores the default the concrete types had before
+    /// the protocol made `completion` required).
+    func sendFrame(_ frame: Data) { sendFrame(frame, completion: nil) }
+}
+
+public final class FrameConnection: FrameChannel {
     public static let nearbyServiceType = "_FC9F5ED42C8A._tcp."
 
     let connection: NWConnection

@@ -25,6 +25,23 @@ public enum QuickStart {
         Bootstrap(advertisingId: randomData(10), sharedSecret: randomData(32))
     }
 
+    /// A bootstrap that persists across runs (so the Mac's Bluetooth name + the
+    /// deeplink stay stable while testing). Stored as two base64 lines.
+    public static func loadOrCreateBootstrap(path: String = "/tmp/phonehub-qs-bootstrap.txt") -> Bootstrap {
+        if let s = try? String(contentsOfFile: path, encoding: .utf8) {
+            let lines = s.split(separator: "\n")
+            if lines.count >= 2,
+               let id = Data(base64Encoded: String(lines[0])),
+               let secret = Data(base64Encoded: String(lines[1])) {
+                return Bootstrap(advertisingId: id, sharedSecret: secret)
+            }
+        }
+        let b = newBootstrap()
+        let out = "\(b.advertisingId.base64EncodedString())\n\(b.sharedSecret.base64EncodedString())"
+        try? out.write(toFile: path, atomically: true, encoding: .utf8)
+        return b
+    }
+
     /// The QR contents: https://signin.google/qs/<advertising_id>?key=<secret>
     /// (qr_code.cc GetQRCodeURLString).
     public static func qrURL(_ b: Bootstrap) -> String {
@@ -73,6 +90,19 @@ public enum QuickStart {
         } catch {
             return false
         }
+    }
+
+    /// Same as `buildHandshakeMessage` but the auth_string is raw bytes — the
+    /// UKEY2 auth token Quick Start actually carries (not a UTF-8 string).
+    public static func buildHandshakeMessage(authBytes: Data, secret: Data,
+                                             role: Int, nonce: Data? = nil) throws -> Data {
+        let n = nonce ?? randomData(12)
+        let authPayload = Pb.varint(1, UInt64(bitPattern: Int64(role))) + Pb.bytes(2, authBytes)
+        let box = try AES.GCM.seal(authPayload, using: SymmetricKey(data: secret),
+                                   nonce: AES.GCM.Nonce(data: n))
+        let payload = box.ciphertext + box.tag
+        let v1 = Pb.bytes(1, n) + Pb.bytes(2, payload)
+        return Pb.varint(1, 1 /* V1 */) + Pb.message(2, v1)
     }
 
     static func randomData(_ n: Int) -> Data {

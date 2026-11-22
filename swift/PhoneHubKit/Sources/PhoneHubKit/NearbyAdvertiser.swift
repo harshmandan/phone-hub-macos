@@ -30,7 +30,9 @@ public final class NearbyAdvertiser: NSObject {
         let idStr = Array(advertisingId.base64url.replacingOccurrences(of: "=", with: "").utf8)
         var adv: [UInt8] = [5, 8] + idStr
         adv += [1, 0]  // isQuickStart, preferTargetUserVerification
-        while adv.count < 60 { adv.append(0) }
+        // NOTE: Chromium pads advertisement_data to 60 bytes, but that pushes the
+        // Bluetooth-Classic device name past macOS's ~128-char broadcast cap (the
+        // inquiry truncates it). Keep it compact so the whole name fits on the air.
         let advB64 = Array(Data(adv).base64url.replacingOccurrences(of: "=", with: "").utf8)
         var info: [UInt8] = [1]  // version
         let nameBytes = Array(name.utf8).prefix(17)
@@ -47,23 +49,27 @@ public final class NearbyAdvertiser: NSObject {
     private let serviceIdHash: [UInt8]
 
     private let quickStartAdvertisingId: Data?
+    private let quickStartSharedSecret: Data?
 
     public init(name: String, serviceType: String = quickShareServiceType,
                 serviceIdHash: [UInt8] = quickShareServiceIdHash,
-                quickStartAdvertisingId: Data? = nil) {
+                quickStartAdvertisingId: Data? = nil,
+                quickStartSharedSecret: Data? = nil) {
         self.name = name
         self.serviceType = serviceType
         self.serviceIdHash = serviceIdHash
         self.quickStartAdvertisingId = quickStartAdvertisingId
+        self.quickStartSharedSecret = quickStartSharedSecret
         super.init()
     }
 
     /// Advertise as a Quick Start target (not Quick Share), matching a QR's
     /// advertising id.
-    public static func quickStart(name: String, advertisingId: Data) -> NearbyAdvertiser {
+    public static func quickStart(name: String, advertisingId: Data, sharedSecret: Data? = nil) -> NearbyAdvertiser {
         NearbyAdvertiser(name: name, serviceType: quickStartServiceType,
                          serviceIdHash: quickStartServiceIdHash,
-                         quickStartAdvertisingId: advertisingId)
+                         quickStartAdvertisingId: advertisingId,
+                         quickStartSharedSecret: sharedSecret)
     }
 
     private func randomEndpointId() -> [UInt8] {
@@ -88,7 +94,7 @@ public final class NearbyAdvertiser: NSObject {
         listener = try! NWListener(using: NWParameters(tls: .none))
         listener.newConnectionHandler = { conn in
             print("!! phone connected:", conn.endpoint)
-            let nearby = NearbyConnection(FrameConnection(conn))
+            let nearby = NearbyConnection(FrameConnection(conn), quickStartSecret: self.quickStartSharedSecret)
             self.connections.append(nearby)  // retain it
             nearby.start()
         }
