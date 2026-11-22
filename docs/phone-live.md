@@ -70,3 +70,19 @@ act as a nearby Chromebook over BLE — advertise, connect, and run the setup
 handshake with the phone present. That is the remaining build, and it may still
 hit a legitimacy check during the handshake. This is the real frontier; it needs
 the Mac's BLE (advertising + handshake), not just server calls.
+
+## BLE scan result (from the Mac, user's own Terminal)
+
+The scanner works (bluetooth poweredOn; the harness sandbox blocks BT so it must
+run in a real Terminal with Bluetooth granted). Nearby BLE traffic included
+Google cross-device services — `FEF3` (Nearby/Quick Share, ~27-byte payload, NOT
+a Phone Hub EID), `FE9F`, `FEB9` — plus Microsoft `FCF1` (Swift Pair) and various
+named devices.
+
+No Better Together / Phone Hub beacon (a short 2-byte EID under the advertising
+service) was seen. And we could not recognise one anyway: it would need the
+phone's beacon seeds, which live in the encrypted metadata the phone has not
+published (because it is not linked). This empirically closes the loop: the phone
+is not advertising for Phone Hub, and we cannot get it there without a real
+Chromebook-initiated, proximity-verified setup. `FEF3` is confirmed as a live
+Google cross-device advertising service (the scaffold's guessed service UUID).
