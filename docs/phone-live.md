@@ -39,3 +39,18 @@ metadata. This is now testable because the phone is live on the account.
 
 After linking: scan/connect over BLE (BleRadio), run the handshake (we already
 hold the phone's public key), then the features.
+
+## Linking attempt (probe/link.py)
+
+- `v1:batchSetFeatureStatuses` — enabling BETTER_TOGETHER_HOST on the phone
+  (exclusively) and BETTER_TOGETHER_CLIENT on us returns **HTTP 200**. The server
+  accepted the link from our side.
+- `v1:batchNotifyGroupDevices` (to push the phone to re-sync immediately) **404s**
+  on the public REST gateway — not exposed. So we can't force the phone to act;
+  it must pick up the host flag on its own DeviceSync, or linking is finished from
+  the phone's own Chromebook-linking screen.
+- Right after, the phone's `encryptedMetadata` is still empty. Pending: the phone
+  syncing (MIUI background limits may delay it) or a phone-side nudge.
+
+Feature-type strings: `BETTER_TOGETHER_HOST` / `BETTER_TOGETHER_CLIENT`
+(cryptauth_feature_type.cc). TargetService.DEVICE_SYNC = 2.
