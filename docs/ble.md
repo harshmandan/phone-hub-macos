@@ -28,7 +28,8 @@ Mapped from `chromeos/ash/services/secure_channel`.
 **Offline, pure crypto/logic — buildable and testable now (Python):**
 - ✅ **EID discovery** (`probe/ble/eid.py`) — the rotating-ID derivation and
   matching. Done, unit-tested against the Chromium algorithm.
-- ⬜ **uWeave framing** — packetization. Pure byte-format work.
+- ✅ **uWeave framing** (`probe/ble/weave.py`) — packetization into BLE-sized
+  packets, with counters and fragmentation. Round-trip tested.
 - 🔨 **Device-to-device authenticator** — the encrypted channel it produces is
   built and tested (`probe/ble/session_keys.py`, `secure_context.py`): session
   key = SHA256(ECDH of ephemeral keys), split into initiator/responder AES keys
@@ -59,8 +60,12 @@ spec from `device_to_device_initiator_helper.cc`:
 3. **[InitiatorAuth]** Mac → phone: the Mac proves itself likewise.
 
 Open item to confirm against a live phone: the exact origin of the "persistent
-symmetric key" used to sign [Hello] (derived from the enrolled keys vs.
-established during pairing).
+symmetric key" used to sign [Hello]. The Chromebook setup flow (reference
+screenshots) detects the phone, then asks for the account **PIN** and a
+**phone-side permission** before "All set" — i.e. there is an explicit
+multidevice **setup/pairing** step that establishes this trust, separate from the
+server enrollment we did. Reproducing that pairing is the real prerequisite for
+the handshake, and it needs the phone.
 
 ## The gating fact
 
@@ -71,5 +76,11 @@ phone, or use the real account).
 
 ## Status
 
-EID discovery done. The next offline pieces are the authenticator and uWeave
-framing (both reusable as a reference/oracle for the eventual Swift radio code).
+Offline layer complete: EID discovery, encrypted channel (session keys + secure
+context), and uWeave framing — all unit-tested. These are the reference/oracle
+for the Swift radio code.
+
+Everything remaining needs a phone on the account and the Swift/CoreBluetooth
+radio: reproduce the multidevice **setup/pairing** (the PIN + phone-permission
+step), run the **identity-proof handshake**, drive the **BLE radio**, then
+implement each **feature** protocol. None of it is verifiable without the phone.
