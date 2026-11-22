@@ -5,16 +5,36 @@ BLE Fast Pair beacon that ChromeOS Quick Start emits, so a nearby Android phone 
 **"Set up this Chromebook"** prompt. See `../docs/quick-start.md` for why this is the one
 signal the Mac can't send itself.
 
-## Flash it (Arduino IDE)
+## Status: toolchain ready, sketch compiles
 
-1. Install the **ESP32 boards package** (core 3.x): Arduino IDE → Settings → Additional
-   Boards URLs → `https://espressif.github.io/arduino-esp32/package_esp32_index.json`,
-   then Boards Manager → install **esp32** by Espressif.
-2. Plug the XIAO C6 into the Mac with a **USB-C data cable**.
-3. Tools → Board → **XIAO_ESP32C6**. Tools → Port → the new `/dev/cu.usbmodem…`.
-4. Open `chromebook_beacon/chromebook_beacon.ino` → Upload.
-   (If upload fails: hold **BOOT**, tap **RESET**, release BOOT, upload again.)
-5. Serial Monitor at **115200** should print `Beacon up: FE2C + 30 68 46 …`.
+Already installed on this Mac (via `brew` + `arduino-cli`), so there's nothing to set up
+when the board arrives:
+- Arduino IDE (`/Applications/Arduino IDE.app`)
+- `arduino-cli` 1.5.1, ESP32 core **esp32:esp32 4.0.0**, **NimBLE-Arduino 2.5.2**
+- The sketch **compiles clean** for `esp32:esp32:XIAO_ESP32C6` (51% flash).
+
+The C6 ships with NimBLE (Bluedroid is off) and extended advertising on, so the sketch uses
+`NimBLEExtAdvertisement` in **legacy mode** — a classic scannable, non-connectable PDU, which
+is what the phone's Fast Pair scanner expects.
+
+## Flash it (when the board arrives)
+
+Plug the XIAO C6 into the Mac with a **USB-C data cable**, then either:
+
+**Command line (simplest):**
+```
+cd /Users/harsh/Developer/phone-hub-macos
+arduino-cli board list                       # find the port, e.g. /dev/cu.usbmodem1101
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32C6 firmware/chromebook_beacon
+arduino-cli upload  --fqbn esp32:esp32:XIAO_ESP32C6 -p <PORT> firmware/chromebook_beacon
+arduino-cli monitor -p <PORT> -c baudrate=115200
+```
+(If upload fails: hold **BOOT**, tap **RESET**, release BOOT, upload again.)
+
+**Arduino IDE:** open the `.ino`, Tools → Board → **XIAO_ESP32C6**, pick the port, Upload,
+then open Serial Monitor at **115200**.
+
+Either way the serial output should print `Beacon up: FE2C + 30 68 46 …`.
 
 ## Test it
 
@@ -27,10 +47,14 @@ signal the Mac can't send itself.
 (Nearby Connections + UKEY2, already built). The `advertising_id` in the sketch must then
 match the id the Mac advertises (see the comment in the `.ino`).
 
-**If nothing appears:** the beacon alone may not be enough (the phone-side match lives in
-Google Play Services, closed-source). Next things to try: a random BLE address, confirming
-the bytes on air with a scanner (nRF Connect app), or the Bumble + dongle path to iterate
-the payload quickly. See `../docs/quick-start.md`.
+**If serial prints `ERROR: advertising failed to start`:** NimBLE rejected the scannable
+legacy adv-data layout — tell me and I'll shift the bytes (e.g. move the service UUID list,
+or carry more in the scan response).
+
+**If it advertises but no phone prompt appears:** the beacon alone may not be enough (the
+phone-side match lives in Google Play Services, closed-source). Next: confirm the bytes on
+air with the **nRF Connect** app, try a random BLE address, or switch to the Bumble + dongle
+path to iterate quickly. See `../docs/quick-start.md`.
 
 ## Notes
 
