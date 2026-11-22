@@ -40,8 +40,12 @@ Mapped from `chromeos/ash/services/secure_channel`.
   DeviceSync `BetterTogetherDeviceMetadata` (currently left empty).
 
 **On-device — needs Swift/CoreBluetooth and a live phone:**
-- ⬜ The BLE radio: advertising, scanning, GATT connect. macOS does this through
-  CoreBluetooth, so this layer is Swift, not Python.
+- 🔨 The BLE radio: `swift/PhoneHubKit/Sources/PhoneHubKit/BleRadio.swift` is a
+  CoreBluetooth scaffold — the Mac as central, scanning by rotating EID,
+  connecting, and running uWeave over the TX/RX characteristics
+  (`00000100-0004-1000-8000-001A1100010{1,2}`), wired to the tested Eid/Weave
+  code. It compiles but is UNVERIFIED (no tests — it needs hardware). The
+  advertising service UUID and the handshake/feature handlers are marked TODO.
 - ⬜ End-to-end testing against a real phone on the same account.
 
 ## The authenticator handshake (spec — needs a phone)

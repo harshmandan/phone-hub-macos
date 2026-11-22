@@ -2,15 +2,20 @@ import Foundation
 import CryptoKit
 
 /// BLE ephemeral IDs for Better Together discovery. Port of `ble/eid.py`.
-enum Eid {
+public enum Eid {
     static let periodMs: Int64 = 15 * 60 * 1000
     static let lookahead = 2
     static let byteCount = 2
 
-    struct BeaconSeed {
-        let data: Data
-        let startTimeMs: Int64
-        let endTimeMs: Int64
+    public struct BeaconSeed {
+        public let data: Data
+        public let startTimeMs: Int64
+        public let endTimeMs: Int64
+        public init(data: Data, startTimeMs: Int64, endTimeMs: Int64) {
+            self.data = data
+            self.startTimeMs = startTimeMs
+            self.endTimeMs = endTimeMs
+        }
     }
 
     static func rawEid(seed: Data, startOfPeriodMs: Int64, extraEntropy: Data? = nil) -> Data {
