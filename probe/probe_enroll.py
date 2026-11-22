@@ -82,8 +82,11 @@ def get_gcm() -> tuple[str, str]:
         print("GCM token step failed; using a placeholder to still test CHROME:")
         print(out.stderr.strip().splitlines()[-1] if out.stderr.strip() else "")
         import uuid as _uuid
+        from get_gcm_token import generate_instance_id
 
-        return "placeholder-iid", "placeholder-gcm-token-" + _uuid.uuid4().hex
+        # Use a real-format InstanceID even when GCM registration fails, so the
+        # enrolled device_id is valid for later DeviceSync calls.
+        return generate_instance_id(), "placeholder-gcm-token-" + _uuid.uuid4().hex
     instance_id, token = out.stdout.strip().split(" ", 1)
     return instance_id, token
 
