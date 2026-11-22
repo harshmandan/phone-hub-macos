@@ -3,17 +3,13 @@
 The Python probe proved the protocol end to end on the server side and built the
 offline BLE crypto. This is the plan to turn that into a real macOS client.
 
-## Shape: a framework, not a Tether plugin
+## Shape: a standalone framework + app
 
-Build **PhoneHubKit**, a standalone Swift package. Tether (or a small standalone
-app) consumes it.
-
-Why not a Tether plugin: Tether's `TetherPlugin` model is KDE Connect — JSON
-packets over a local TLS socket, devices trusted by pinned certificate. Phone
-Hub is a different world: a Google account, CryptAuth enrollment, BLE transport,
-CryptAuth/securegcm crypto. Forcing it into the plugin protocol would tangle two
-unrelated trust and transport models. A separate framework keeps Tether's code
-clean; Tether just shows the Phone Hub device alongside its KDE Connect ones.
+Build **PhoneHubKit**, a self-contained Swift package, with a thin macOS app on
+top. This project is unrelated to KDE Connect / Tether: Phone Hub is a different
+world (a Google account, CryptAuth enrollment, BLE transport, securegcm crypto),
+so it shares no protocol, transport, or trust model with that stack. It stands on
+its own.
 
 ## Layer map (proven Python → Swift)
 
@@ -81,13 +77,6 @@ on-device.
    Lock.
 
 Steps 1–2 can proceed now. Steps 3+ need a phone on the account.
-
-## Integration with Tether
-
-PhoneHubKit as a Swift-package dependency. Tether surfaces a Phone Hub device in
-its sidebar; features map to UI (notifications into the existing notifications
-pane; hotspot/unlock as new controls). Keep PhoneHubKit free of Tether types so
-it can also ship as a standalone app.
 
 ## Risks
 
