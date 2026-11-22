@@ -51,15 +51,24 @@ mechanism than the BLE Better Together link we were stuck on.
   auth" over the two init messages (ported from google/ukey2). Both sides derive
   the same next-secret + auth string; round-trip unit-tested. Reuses our
   SecureMessage ECDH + GenericPublicKey.
-- ⬜ **Nearby Connections transport** — the remaining bulk:
-  - OfflineFrames connection protocol (CONNECTION_REQUEST / RESPONSE / KEEP_ALIVE
-    / PAYLOAD_TRANSFER frames) on top of the UKEY2-secured channel;
-  - the mediums: BLE advertising + GATT for discovery, then mDNS + TCP (Wi-Fi
-    LAN) for bandwidth — the approach NearDrop uses on macOS to sidestep the
-    CoreBluetooth advertising limits;
-  - discovery / endpoint advertising with the advertising_id.
-  Best adapted from NearDrop (Swift/macOS) or rquickshare (Rust).
+- ✅ **Nearby OfflineFrames** (`NearbyFrames.swift`) — the connection protocol:
+  ConnectionRequest / ConnectionResponse / KeepAlive / PayloadTransfer frames +
+  the 4-byte length prefix. Build/parse round-trip tested, and a payload frame
+  rides correctly over the UKEY2→SessionKeys→SecureContext channel (the layers
+  interlock).
+- ⬜ **The medium / live transport** — the remaining bulk, and it needs real
+  networking + a phone, so it runs in a Terminal, not here:
+  - discovery: advertise the endpoint (advertising_id) over BLE, and an mDNS
+    (`_FC9F5ED42C8A.*._tcp`-style) service for Wi-Fi LAN;
+  - a TCP socket carrying the length-prefixed frames;
+  - orchestration: sequence ConnectionRequest ↔ UKEY2 ↔ ConnectionResponse, then
+    payloads, matching Nearby Connections' state machine.
+  Best adapted from NearDrop (Swift/macOS) — it already does exactly this medium
+  layer on a Mac.
 - ⬜ second-device auth / account transfer.
+
+Everything through the OfflineFrames is built and unit-tested offline (7 green
+checks). The remaining work is live networking + the phone.
 
 Done so far ties together: UKEY2 yields the `auth_string`, which the Quick Start
 AES-GCM handshake (already built) consumes. The gap is the transport that carries

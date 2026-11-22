@@ -38,6 +38,8 @@ public enum SelfTest {
         print("ok  Quick Start QR + AES-GCM handshake round-trip")
         try ukey2()
         print("ok  UKEY2 handshake — both sides derive the same secret + auth")
+        try nearbyFrames()
+        print("ok  Nearby OfflineFrames build/parse + payload over the channel")
         print("all passed")
     }
 
@@ -124,6 +126,27 @@ public enum SelfTest {
         try check(!QuickStart.verifyHandshakeMessage(
             msg, secret: b.sharedSecret, expectedRole: QuickStart.roleTarget,
             expectedAuthString: "nope"), "wrong auth string rejected")
+    }
+
+    static func nearbyFrames() throws {
+        try check(NearbyFrames.frameType(NearbyFrames.connectionRequest(
+            endpointId: "ABCD", endpointInfo: Data([1, 2, 3]), nonce: 42)) == NearbyFrames.frameConnectionRequest, "conn req")
+        try check(NearbyFrames.frameType(NearbyFrames.connectionResponse(accept: true)) == NearbyFrames.frameConnectionResponse, "conn resp")
+        try check(NearbyFrames.frameType(NearbyFrames.keepAlive(ack: false, seq: 7)) == NearbyFrames.frameKeepAlive, "keep-alive")
+
+        let body = random(500)
+        let frame = NearbyFrames.payloadBytes(id: 99, body: body)
+        let parsed = NearbyFrames.payloadBody(frame)
+        try check(parsed?.id == 99 && parsed?.body == body && parsed?.last == true, "payload round-trip")
+        try check(NearbyFrames.lengthPrefixed(frame).count == frame.count + 4, "length prefix")
+
+        // the layers tie together: UKEY2 secret → SessionKeys → SecureContext,
+        // carrying a Nearby payload frame.
+        let secret = try Ukey2.selfHandshake().client.nextSecret
+        let keys = SessionKeys(rootSymmetricKey: secret)
+        let a = SecureContext(sessionKeys: keys, role: .initiator)
+        let b = SecureContext(sessionKeys: keys, role: .responder)
+        try check(NearbyFrames.payloadBody(try b.decode(a.encode(frame)))?.body == body, "frame over secure channel")
     }
 
     static func ukey2() throws {
