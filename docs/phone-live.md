@@ -95,3 +95,34 @@ connected** — no central subscribed, no writes. Confirms the two walls: macOS
 CoreBluetooth drops the service data where the EID must go, and the phone does
 not scan for a bare Chromebook beacon. The real Chromebook-initiated path is the
 QR Quick Start flow over Nearby Connections (docs/quick-start.md), not raw BLE.
+
+## ROOT CAUSE found via ADB logcat (the real wall)
+
+Watching the Redmi's Play Services logs (adb logcat) while re-sending the host
+flag, the phone reacted and revealed the actual failure:
+
+```
+CryptauthV2 [DeviceSyncController] Device sync completed
+CryptauthV2 [DeviceMetadataFetcher] Missing device metadata packets for ... DeviceSync:BetterTogether
+CryptauthV2 [DeviceMetadataFetcher] No device metadata packets for key DeviceSync:BetterTogether
+ProximityAuth [CryptauthPostSyncProcessor] Failed to get my synced metadata.
+ProximityAuth [BetterTogetherSetup] Trying to disable
+ProximityAuth [PhoneHubService] No enabled account, stopping service
+```
+
+So it is NOT a UI/initiation gate. The Better Together **device group is broken**:
+no device has valid synced metadata, the phone can't even get its own, so it
+disables Better Together and Phone Hub stops ("No enabled account").
+
+Likely cause: **us**. Every `device_sync.py` / Swift syncMetadata call generated
+a FRESH group key with `needGroupPrivateKey=false`, overwriting the group's
+shared key. We never ran the proper group-key handshake
+(`ShareGroupPrivateKey` + `needGroupPrivateKey=true`), so no device can decrypt
+another's metadata. We were corrupting the group, not joining it — and our
+repeated test enrollments left ~6 half-formed "Google eve" devices in it.
+
+This is fixable: fetch the existing group public key, request the group PRIVATE
+key via ShareGroupPrivateKey, encrypt our metadata to the shared key. Then the
+phone should get valid synced metadata and Better Together/Phone Hub can engage.
+The earlier "phone is Chromebook-initiated" conclusion was premature — the phone
+never had a healthy group to act on.
