@@ -13,6 +13,15 @@ a Chromebook does, then connecting to the phone over Bluetooth LE.
 
 ## Status
 
+Feasibility fully explored. **Proven live against a real phone:** the Mac enrolls
+as a Chromebook (CryptAuth), joins the account's device group, and — over Nearby
+Connections — completes a UKEY2 handshake and a live encrypted (D2D) channel with
+the phone. **The wall:** Phone Hub and Quick Start are Chromebook-*initiated*, and
+the phone offers no way to start or accept a link except from a genuine
+Chromebook's setup flow — which a non-ChromeOS Mac can't present. Every protocol
+layer works; the phone's initiation model is the stop. See docs/quick-start.md.
+
+
 | Gate | What it proves | Result |
 | --- | --- | --- |
 | 1. Scope | the account can get the `cryptauth` OAuth scope | **passed** |

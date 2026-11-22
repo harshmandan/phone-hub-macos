@@ -167,3 +167,28 @@ command (advertises as Quick Start and prints the matching QR).
 Note: NearDrop's protocol details were nonetheless correct — our live handshake
 completed using them, so the transport has not drifted. These newer sources are
 for going further (Quick Start app protocol, current edge cases).
+
+## The definitive wall (conclusion)
+
+Advertising as a real Quick Start target (`_2D103F062BB8._tcp.`) with the matching
+QR, the phone never connected — and the owner confirmed: **there is no phone-side
+way to initiate or scan a Chromebook link.** No notification, no setup prompt, no
+QR-scan entry. Both Phone Hub (Better Together) and Quick Start are
+**Chromebook-initiated**; the phone only responds when a genuine Chromebook
+reaches it during that Chromebook's setup flow.
+
+So the simulated-Mac approach reaches its ceiling here — not from a protocol gap
+(every layer works), but from the phone's initiation model. Driving the link
+needs the ChromeOS-side setup UI/OOBE that a non-ChromeOS device can't present.
+
+### What was proven (all live, against a real phone)
+
+- Server side: enroll the Mac as a CHROME device, DeviceSync, join the account's
+  Better Together group, set the host flag — all 200s.
+- Nearby Connections transport: discovery (Bonjour), TCP, length-prefixed framing.
+- UKEY2 key exchange completed with the phone; the shared secret derived.
+- The D2D AES-256-CBC+HMAC channel: we decrypted a frame the phone encrypted.
+
+Everything up to and including a live encrypted channel with the phone works.
+The one thing that doesn't is making the phone *start* the Phone Hub / Quick Start
+link, because that is the Chromebook's job and the phone exposes no entry for it.
