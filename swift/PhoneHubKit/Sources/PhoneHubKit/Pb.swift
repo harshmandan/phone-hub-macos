@@ -55,6 +55,7 @@ enum Pb {
             return v
         }
 
+        // Bounds-checked: malformed/truncated input returns what parsed, never traps.
         while i < data.endIndex {
             let key = readVarint()
             let field = Int(key >> 3)
@@ -63,10 +64,12 @@ enum Pb {
                 out[field] = .varint(readVarint())
             } else if wire == 2 {
                 let len = Int(readVarint())
+                guard len >= 0, data.distance(from: i, to: data.endIndex) >= len else { break }
                 let end = data.index(i, offsetBy: len)
                 out[field] = .bytes(Data(data[i..<end]))
                 i = end
             } else if wire == 1 {  // 64-bit (fixed64) — little-endian
+                guard data.distance(from: i, to: data.endIndex) >= 8 else { break }
                 var v: UInt64 = 0
                 for shift in stride(from: 0, through: 56, by: 8) {
                     v |= UInt64(data[i]) << shift
@@ -74,6 +77,7 @@ enum Pb {
                 }
                 out[field] = .varint(v)
             } else if wire == 5 {  // 32-bit
+                guard data.distance(from: i, to: data.endIndex) >= 4 else { break }
                 i = data.index(i, offsetBy: 4)
             } else {
                 break
