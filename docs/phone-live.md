@@ -126,3 +126,33 @@ key via ShareGroupPrivateKey, encrypt our metadata to the shared key. Then the
 phone should get valid synced metadata and Better Together/Phone Hub can engage.
 The earlier "phone is Chromebook-initiated" conclusion was premature — the phone
 never had a healthy group to act on.
+
+## Group-key fix attempt — and the deeper, final cause
+
+Implemented `share_group_key.py`: ECIES-encrypt our group private key to the
+phone's device public key and POST ShareGroupPrivateKey (HTTP 200, both pkcs8 and
+raw private-key formats). Forced the phone to sync each time (adb).
+
+It did NOT fix it. The phone kept logging "No device metadata packets" / "Failed
+to get my synced metadata", and the decisive line:
+
+```
+ProximityAuth [BetterTogetherSettings] Initial account check did not find any with BeTo enabled, skipping processing
+```
+
+**Better Together is not ENABLED on the phone's account.** That is upstream of
+the empty group metadata — the missing metadata is a symptom. We set
+BETTER_TOGETHER_HOST server-side and the phone synced feature states from
+CryptAuth, but Better Together stayed disabled locally; sharing the group key and
+forcing syncs changed nothing.
+
+### Final, evidence-backed conclusion
+
+The phone's Better Together enablement is **local state that only the
+Chromebook-initiated setup flow flips.** No amount of server-side work
+(enrollment, host flags, group-key sharing, metadata) turns it on. A Mac can be a
+flawless CryptAuth device and open a live encrypted channel with the phone — all
+proven — but the phone will not enable Phone Hub for an account until a genuine
+Chromebook walks it through setup, and that setup has no phone-side or
+server-side entry a non-ChromeOS device can reach. The ADB investigation
+confirmed this from the phone's own logs rather than by inference.
