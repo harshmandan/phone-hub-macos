@@ -7,6 +7,9 @@ do {
         print(try SelfTest.unwrapHex(keyHex: args[2], blobHex: args[3]))
     } else if args.count == 4 && args[1] == "enroll" {
         print(try await Enrollment.enroll(email: args[2], masterToken: args[3]))
+    } else if args.count >= 2 && args[1] == "scan" {
+        let secs = args.count >= 3 ? (Double(args[2]) ?? 15) : 15
+        Scanner().run(seconds: secs)
     } else if args.count == 4 && args[1] == "diag" {
         print(try await Enrollment.diag(email: args[2], masterToken: args[3]))
     } else if args.count == 4 && args[1] == "sync" {
