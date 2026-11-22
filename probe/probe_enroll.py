@@ -132,18 +132,25 @@ def main() -> None:
 
     print(">>> GATE 2 PASSED: CHROME enrollment accepted. session:", session_id)
     print()
-    print("=== enrollKeys ===")
+    print("=== enrollKeys (real device key) ===")
+    from enroll_keys import build_enroll_single_key_request
+
+    # P256 device key: no clientEphemeralDh (that is only for symmetric keys).
     enroll_body = {
         "randomSessionId": session_id,
-        "clientEphemeralDh": "",
-        "enrollSingleKeyRequests": [],
+        "enrollSingleKeyRequests": [build_enroll_single_key_request(session_id)],
     }
     code, text = post(ENROLL_KEYS, auth_token, enroll_body)
     print("HTTP", code)
     print(text)
     print()
-    print("Now check the phone: Settings > Google > Devices & sharing.")
-    print("A new Chromebook there = the whole gate passed. Build it.")
+    if code == 200:
+        print(">>> enrollKeys accepted. The device key is enrolled.")
+        print(">>> GATE 3: check the phone — Settings > Google > Devices & sharing.")
+        print(">>> A new Chromebook there = feasibility fully proven.")
+    else:
+        print(">>> enrollKeys rejected. If the error names key_material, the")
+        print(">>> public-key encoding in enroll_keys.py needs adjusting.")
 
 
 if __name__ == "__main__":
