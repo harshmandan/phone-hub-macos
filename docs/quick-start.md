@@ -248,3 +248,60 @@ itself there is NO hardware gate in open source. The single unbroken step is emi
 the FE2C/0x306846 trigger beacon, which the Mac's API blocks but a cheap external BLE
 beacon can supply. Unknown (closed GMS): whether the phone will accept a non-OOBE Mac
 as a Better Together host once prompted.
+
+## Two hardware paths to emit the FE2C/0x306846 beacon (the Mac can't, natively)
+
+The Mac's CoreBluetooth can't broadcast custom service-data/manufacturer-data (only
+local-name + service-UUID list; other adv keys are ignored). Two ways around it:
+
+### Path A — standalone ESP32 beacon (simplest; best for the first trigger test)
+A cheap USB-C ESP32 board (XIAO ESP32-C6 ~₹649, or ESP32-C3 SuperMini ~₹268) flashed
+with one sketch. ESP-IDF `esp_ble_gap_config_adv_data_raw()` +
+`esp_ble_gap_config_scan_rsp_data_raw()` (or NimBLE) set the exact AD structures:
+FE2C service UUID + 3-byte service data {0x30,0x68,0x46} in the ADV packet,
+manufacturer data (company 0x00E0 + 16-byte advertising id) in the scan response
+(won't all fit one 31-byte legacy packet). Self-contained: no Mac BT stack, no libusb.
+Does NOT integrate with the probe — it just beacons.
+
+### Path B — Bumble + USB HCI dongle (Mac-side Python; the build platform)
+Google's Bumble (pure-Python BLE stack) drives an external USB Bluetooth controller
+with full HCI control, from the Mac, next to probe/. Confirmed workable on Apple
+Silicon; friction is small and documented:
+- `brew install libusb` (fallback if the bundled wheel lacks arm64)
+- `sudo nvram bluetoothHostControllerSwitchBehavior="never"` (stop IOBluetooth grabbing
+  the dongle; Apple TN2295), then plug the dongle in
+- `usb_probe` lists the device → address it as `usb:<vid>:<pid>`
+
+Arbitrary adv + separate scan-response is first-class (examples/run_advertiser.py):
+```python
+from bumble.data_types import (AdvertisingData, ServiceData16BitUUID,
+    ManufacturerSpecificData, IncompleteListOf16BitServiceUUIDs)
+from bumble.core import UUID
+device.advertising_data = bytes(AdvertisingData([
+    (AdvertisingData.INCOMPLETE_LIST_OF_16_BIT_SERVICE_CLASS_UUIDS, bytes(UUID('FE2C'))),
+    # ServiceData16BitUUID(UUID('FE2C'), bytes([0x30,0x68,0x46])) via its AD tag
+]))
+device.scan_response_data = bytes(AdvertisingData([
+    # ManufacturerSpecificData(company_identifier=0x00E0, data=<16 bytes>)
+]))
+await device.start_advertising(...)
+```
+Advantages: iterate the payload from Python instantly, script ADV vs scan-response,
+and (later) the same dongle/stack can drive a real GATT connection — so Path B can grow
+into more of the project, Path A can't.
+
+Dongles (India), ranked:
+1. Nordic nRF52840 USB dongle (PCA10059) + Zephyr `hci_usb` (Bumble's prebuilt
+   firmware, one-time `nrfutil` flash). Bumble's own recommended controller; clean
+   USB-HCI, reliable LE advertising. ~₹1,249–1,749 (Electropi / robu.in). BEST.
+   NB: the Nordic *dongle*, not a XIAO nRF52840 (same SoC, but undocumented for this).
+2. TP-Link UB500 (Realtek RTL8761B), ~₹499–599, no flashing — but macOS+Bumble
+   unverified; watch for the BT5.3 "V2" hardware revision. Cheaper gamble.
+3. CSR8510 A10, ~₹149–300 — AVOID, market flooded with broken clones (genuine =
+   lsusb 0a12:0001).
+
+### Recommended order
+Path A (ESP32) first — ₹649, near-zero setup — to settle the one open question:
+does the beacon make the phone show "Set up this Chromebook"? (phone-side match is
+closed GMS, so this is empirical.) If it does, adopt Path B (Bumble + nRF52840 dongle)
+as the platform for the actual build.
