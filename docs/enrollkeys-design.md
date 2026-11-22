@@ -58,6 +58,8 @@ ECDSA-SHA256( newPrivateKey, "CryptAuth Key Proof" + sessionBytes )   # DER sign
 
 ## Status
 
-Built and unit-checked (structure, signature, encoding). Not yet run against the
-server — that needs the throwaway account. A 200 from enrollKeys, then the Mac
-appearing on the phone, closes gate 3.
+Run against the server on 2026-11-22: enrollKeys returned **HTTP 200** with
+`enrollSingleKeyResponses: [{}]`. The `keyMaterial` encoding was accepted as-is.
+The device key is enrolled — the server side of gate 3 is done. What remains is
+confirming the phone lists the Mac (depends on the phone running device sync /
+the account's multidevice setup).
