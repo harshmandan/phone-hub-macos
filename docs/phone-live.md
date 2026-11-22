@@ -54,3 +54,19 @@ hold the phone's public key), then the features.
 
 Feature-type strings: `BETTER_TOGETHER_HOST` / `BETTER_TOGETHER_CLIENT`
 (cryptauth_feature_type.cc). TargetService.DEVICE_SYNC = 2.
+
+## The linking barrier (finding)
+
+The phone's Chromebook-linking screen says **"go to your Chromebook to link your
+device"** — i.e. linking is **Chromebook-initiated** and the phone stays passive
+until a Chromebook reaches it. Our server-side host flag (batchSetFeatureStatuses
+200) did not make the phone link, and we cannot push or verify it
+(batchNotifyGroupDevices and batchGetFeatureStatuses both 404 on the public REST
+gateway).
+
+Conclusion: the server-side impersonation is complete (enroll → DeviceSync → join
+group → host flag accepted), but completing the **live link** needs the Mac to
+act as a nearby Chromebook over BLE — advertise, connect, and run the setup
+handshake with the phone present. That is the remaining build, and it may still
+hit a legitimacy check during the handshake. This is the real frontier; it needs
+the Mac's BLE (advertising + handshake), not just server calls.
