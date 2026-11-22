@@ -49,11 +49,8 @@ public final class NearbyAdvertiser: NSObject {
         listener = try! NWListener(using: NWParameters(tls: .none))
         listener.newConnectionHandler = { conn in
             print("!! phone connected:", conn.endpoint)
-            let fc = FrameConnection(conn)
-            fc.start()
-            fc.receiveFrame { frame in
-                print("!! first frame: \(frame?.count ?? 0) bytes — type \(frame.flatMap { NearbyFrames.frameType($0) }.map(String.init) ?? "?")")
-            }
+            let nearby = NearbyConnection(FrameConnection(conn))
+            nearby.start()
         }
         listener.stateUpdateHandler = { state in
             if case .ready = state, let port = self.listener.port {

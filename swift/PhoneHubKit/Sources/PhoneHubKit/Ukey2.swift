@@ -29,6 +29,52 @@ public enum Ukey2 {
         Pb.varint(1, type) + Pb.bytes(2, data)
     }
 
+    /// Server side of the handshake (we advertise; the phone is the client).
+    public final class Server {
+        private let serverKey = P256.KeyAgreement.PrivateKey()
+        private var clientInitRaw = Data()
+        private var serverInitRaw = Data()
+        private var commitment = Data()
+
+        public init() {}
+
+        /// Given the phone's wrapped ClientInit, return our wrapped ServerInit.
+        public func serverInit(clientInitRaw: Data) throws -> Data {
+            self.clientInitRaw = clientInitRaw
+            let msg = Pb.readFields(clientInitRaw)
+            guard msg.varint(1) == typeClientInit, let initData = msg.bytes(2) else {
+                throw SecureMessage.SecureMessageError(message: "not a ClientInit")
+            }
+            let ci = Pb.readFields(initData)
+            // cipher_commitments[*] — take the P256_SHA512 one (field 3 = CipherCommitment msg)
+            let cc = Pb.readFields(ci.bytes(3) ?? Data())
+            commitment = cc.bytes(2) ?? Data()
+
+            var si = Data()
+            si += Pb.varint(1, 1)                                  // version
+            si += Pb.bytes(2, rand(32))                            // random
+            si += Pb.varint(3, cipherP256Sha512)                  // handshake_cipher
+            si += Pb.bytes(4, SecureMessage.genericPublicKey(serverKey.publicKey))  // public_key
+            serverInitRaw = wrap(type: typeServerInit, data: si)
+            return serverInitRaw
+        }
+
+        /// Given the phone's wrapped ClientFinished, verify + derive the outputs.
+        public func finish(clientFinishedRaw: Data) throws -> Derived {
+            guard Data(SHA512.hash(data: clientFinishedRaw)) == commitment else {
+                throw SecureMessage.SecureMessageError(message: "ClientFinished commitment mismatch")
+            }
+            let msg = Pb.readFields(clientFinishedRaw)
+            guard msg.varint(1) == typeClientFinish, let cfData = msg.bytes(2) else {
+                throw SecureMessage.SecureMessageError(message: "not a ClientFinished")
+            }
+            let cf = Pb.readFields(cfData)
+            let clientPub = try SecureMessage.parseGenericPublicKey(cf.bytes(1) ?? Data())
+            return try derive(ownPrivate: serverKey, peerPublic: clientPub,
+                              wrappedClientInit: clientInitRaw, wrappedServerInit: serverInitRaw)
+        }
+    }
+
     static func hkdf(_ ikm: Data, salt: Data, info: Data, length: Int) -> Data {
         CryptoKit.HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: ikm),
                                          salt: salt, info: info, outputByteCount: length)

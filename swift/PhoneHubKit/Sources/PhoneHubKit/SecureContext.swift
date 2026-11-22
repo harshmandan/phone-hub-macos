@@ -14,6 +14,10 @@ final class SecureContext {
 
     enum Role { case initiator, responder }
 
+    /// If true, decode() accepts out-of-order sequence numbers (logs instead of
+    /// throwing) — useful while bringing up a live connection.
+    var lenientSequence = false
+
     init(sessionKeys: SessionKeys, role: Role) {
         switch role {
         case .initiator:
@@ -23,6 +27,14 @@ final class SecureContext {
             encodeKey = sessionKeys.responder
             decodeKey = sessionKeys.initiator
         }
+        encodeSeq = Self.authSequenceNumber
+        decodeSeq = Self.authSequenceNumber
+    }
+
+    /// Explicit per-direction keys (Nearby Connections: d2dServerKey / d2dClientKey).
+    init(encodeKey: Data, decodeKey: Data) {
+        self.encodeKey = encodeKey
+        self.decodeKey = decodeKey
         encodeSeq = Self.authSequenceNumber
         decodeSeq = Self.authSequenceNumber
     }
@@ -41,7 +53,13 @@ final class SecureContext {
         let fields = Pb.readFields(payload)
         decodeSeq += 1
         let seq = fields.varint(2)
-        guard seq == decodeSeq else { throw SequenceError(expected: decodeSeq, got: seq) }
+        if seq != decodeSeq {
+            if lenientSequence {
+                decodeSeq = seq ?? decodeSeq  // resync
+            } else {
+                throw SequenceError(expected: decodeSeq, got: seq)
+            }
+        }
         return fields.bytes(1) ?? Data()
     }
 }

@@ -1,0 +1,83 @@
+import Foundation
+import CryptoKit
+
+/// The Nearby Connections inbound state machine (our role: we advertise, the
+/// phone connects). Drives: ConnectionRequest → UKEY2 (ClientInit/ServerInit/
+/// ClientFinished) → ConnectionResponse → encrypted D2D channel → frames.
+///
+/// Reuses the tested pieces: Ukey2.Server, SecureContext (keyed with the Nearby
+/// d2dServer/d2dClient keys), NearbyFrames. Ported from NearDrop's
+/// InboundNearbyConnection. Logs every step so a live run shows how far it gets.
+public final class NearbyConnection {
+    enum State { case initial, gotConnectionRequest, sentServerInit, gotClientFinished, secure }
+
+    private let fc: FrameConnection
+    private let ukey = Ukey2.Server()
+    private var state: State = .initial
+    private var channel: SecureContext?
+
+    public init(_ fc: FrameConnection) { self.fc = fc }
+
+    public func start() {
+        fc.start()
+        receiveLoop()
+    }
+
+    private func log(_ s: String) { print("  [nearby] \(s)") }
+
+    private func receiveLoop() {
+        fc.receiveFrame { [weak self] data in
+            guard let self, let data else { self?.log("connection closed"); return }
+            do { try self.process(data) } catch { self.log("error: \(error)") }
+            self.receiveLoop()
+        }
+    }
+
+    private func process(_ data: Data) throws {
+        switch state {
+        case .initial:
+            // plaintext OfflineFrame — expect ConnectionRequest (type 1)
+            let t = NearbyFrames.frameType(data)
+            log("frame \(data.count)B, type \(t.map(String.init) ?? "?") (expect ConnectionRequest)")
+            state = .gotConnectionRequest
+
+        case .gotConnectionRequest:
+            // raw UKEY2 ClientInit → send ServerInit
+            let serverInit = try ukey.serverInit(clientInitRaw: data)
+            fc.sendFrame(serverInit)
+            log("UKEY2: got ClientInit (\(data.count)B), sent ServerInit (\(serverInit.count)B)")
+            state = .sentServerInit
+
+        case .sentServerInit:
+            // raw UKEY2 ClientFinished → derive the channel
+            let derived = try ukey.finish(clientFinishedRaw: data)
+            let salt = Data(SessionKeys.salt)
+            let d2dClient = Ukey2.hkdf(derived.nextSecret, salt: salt, info: Data("client".utf8), length: 32)
+            let d2dServer = Ukey2.hkdf(derived.nextSecret, salt: salt, info: Data("server".utf8), length: 32)
+            let ch = SecureContext(encodeKey: d2dServer, decodeKey: d2dClient)  // we are the server
+            ch.lenientSequence = true
+            channel = ch
+            log("UKEY2 complete ✅ — D2D channel derived (auth \(derived.authString.prefix(4).hex)…)")
+            state = .gotClientFinished
+
+        case .gotClientFinished:
+            // phone's ConnectionResponse (plaintext). Reply with ours (accept),
+            // then the channel is encrypted.
+            log("got phone ConnectionResponse (\(data.count)B); sending accept")
+            fc.sendFrame(NearbyFrames.connectionResponse(accept: true))
+            // prove our encryption works: send an encrypted keep-alive.
+            if let ch = channel {
+                fc.sendFrame(ch.encode(NearbyFrames.keepAlive(ack: false, seq: 1)))
+                log("sent ConnectionResponse(accept) + an encrypted keep-alive")
+            }
+            state = .secure
+
+        case .secure:
+            // encrypted frames — decrypt with the channel.
+            guard let ch = channel else { return }
+            let plain = try ch.decode(data)
+            let t = NearbyFrames.frameType(plain)
+            log("🔓 decrypted a frame (\(plain.count)B), type \(t.map(String.init) ?? "?") — D2D CHANNEL WORKS LIVE")
+        }
+    }
+}
