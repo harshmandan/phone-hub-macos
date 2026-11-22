@@ -16,6 +16,8 @@ do {
         let path = args.count >= 3 ? args[2] : "/tmp/quickstart-qr.png"
         print(url)
         print(QrImage.writePNG(url, to: path) ? "QR written: \(path)" : "QR render failed")
+    } else if args.count >= 2 && args[1] == "nettest" {
+        print(NearbyTransport.loopbackTest() ? "loopback frame transport OK" : "loopback FAILED")
     } else if args.count >= 2 && args[1] == "scan" {
         let secs = args.count >= 3 ? (Double(args[2]) ?? 15) : 15
         Scanner().run(seconds: secs)
