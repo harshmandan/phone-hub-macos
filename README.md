@@ -18,7 +18,8 @@ a Chromebook does, then connecting to the phone over Bluetooth LE.
 | 1. Scope | the account can get the `cryptauth` OAuth scope | **passed** |
 | 2. Enroll | Google accepts the Mac as `device_type = CHROME` | **passed** |
 | 3. Enrolled | the device key is accepted (enrollKeys 200) | **passed** (server side) |
-| 4. Visible | the phone lists the Mac as a Chromebook | checking |
+| 4. Visible | the device shows in the account (My Account > devices) | **passed** (as "Mac OS / Android device") |
+| 5. Paired | the Mac is in the Better Together registry with the phone | next (DeviceSync) |
 
 Gates 1 and 2 were the real unknowns. Both cleared with HTTP 200s. What remains
 is ordinary engineering, documented in Chromium's source, not guesswork.
