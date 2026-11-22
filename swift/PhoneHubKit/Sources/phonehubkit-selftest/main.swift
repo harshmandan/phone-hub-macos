@@ -16,6 +16,13 @@ do {
         let path = args.count >= 3 ? args[2] : "/tmp/quickstart-qr.png"
         print(url)
         print(QrImage.writePNG(url, to: path) ? "QR written: \(path)" : "QR render failed")
+    } else if args.count >= 2 && args[1] == "qsserve" {
+        let b = QuickStart.newBootstrap()
+        let url = QuickStart.qrURL(b)
+        _ = QrImage.writePNG(url, to: "/tmp/quickstart-qr.png")
+        print("QR: \(url)\n     (also /tmp/quickstart-qr.png)")
+        let secs = args.count >= 3 ? (Double(args[2]) ?? 180) : 180
+        NearbyAdvertiser.quickStart(name: Host.current().localizedName ?? "Mac", advertisingId: b.advertisingId).run(seconds: secs)
     } else if args.count >= 2 && args[1] == "serve" {
         let secs = args.count >= 3 ? (Double(args[2]) ?? 120) : 120
         NearbyAdvertiser(name: Host.current().localizedName ?? "Mac").run(seconds: secs)

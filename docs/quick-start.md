@@ -138,3 +138,32 @@ did not continue Quick Share's app protocol (we sent a keep-alive). That is fine
    quick-start messages, then second_device_auth.
 
 The transport and crypto — the hard part — are done and live-verified.
+
+## Quick Start-specific values (from current Chromium main)
+
+- **Nearby service id**: `com.google.android.gms.smartdevice.NC_ID`
+  (quick_start_connectivity_service_impl.cc).
+- **mDNS service type**: `_2D103F062BB8._tcp.`, endpoint hash `2D 10 3F` —
+  derived as `_` + SHA256(service_id)[:6], a rule verified because
+  SHA256("NearbySharing")[:6] = `FC9F5ED42C8A`, the known Quick Share type.
+- **Quick Start endpoint_info** (target_device_connection_broker_impl.cc):
+  `[version=1][display name ≤18, null-padded][base64url(advertisement_data[60])]`,
+  where advertisement_data = `[verificationStyle=5 OUT_OF_BAND][deviceType=8]`
+  `[advertisingId string][isQuickStart=1][preferTargetUserVerification=0]` zero-
+  padded to 60. verificationStyle 5 = OUT_OF_BAND tells the phone to scan the QR.
+
+Implemented: `NearbyAdvertiser.quickStart(name:advertisingId:)` + the `qsserve`
+command (advertises as Quick Start and prints the matching QR).
+
+## Up-to-date references (NearDrop is older)
+
+- **google/nearby** — the canonical Nearby Connections, actively maintained
+  (pushed 2026-11-21). Authoritative for the wire protocol.
+- **Martichou/rquickshare** — Rust Quick Share for Linux + macOS (2026-05),
+  more current than NearDrop.
+- **Chromium main** `chrome/browser/ash/login/oobe_quick_start` — authoritative
+  for the Quick Start specifics above.
+
+Note: NearDrop's protocol details were nonetheless correct — our live handshake
+completed using them, so the transport has not drifted. These newer sources are
+for going further (Quick Start app protocol, current edge cases).
