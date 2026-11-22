@@ -80,6 +80,9 @@ def main() -> None:
         print("No device_keys.json — run probe_enroll.py first.")
         sys.exit(1)
 
+    from group_metadata import build as build_group_metadata
+
+    group_public_key, encrypted_metadata = build_group_metadata()
     body = {
         "context": {
             "group": BETTER_TOGETHER_GROUP,
@@ -87,11 +90,10 @@ def main() -> None:
             "deviceId": instance_id,
             "deviceIdToken": gcm_token,
         },
-        # NOTE: 400 until group metadata is added here —
-        #   "groupPublicKey": <group key pair public>,
-        #   "encryptedMetadata": <BetterTogetherDeviceMetadata, encrypted>,
-        # per cryptauth_metadata_syncer_impl.cc. See docs/devicesync.md step 3.
-        "needGroupPrivateKey": True,
+        "groupPublicKey": group_public_key,
+        "encryptedMetadata": encrypted_metadata,
+        # We create the group key, so we hold the private key.
+        "needGroupPrivateKey": False,
     }
 
     print("=== syncMetadata ===")

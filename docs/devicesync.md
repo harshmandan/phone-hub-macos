@@ -7,10 +7,12 @@ other devices. Implemented in `probe/device_sync.py`.
 
 ## Result so far (2026-11-22)
 
-`syncMetadata` returns **HTTP 400 INVALID_ARGUMENT**. Expected — the device is
-not a group member yet. Enrollment proved Google accepts the Mac (enrollKeys
-200), but joining the Better Together group needs more than the user key we
-enrolled.
+`syncMetadata` returns **HTTP 200**. The Mac is now a member of the account's
+Better Together group, listed as `deviceId: dwGxZyBMFPg, deviceName: "Google
+eve"`. This is the registry a phone reads. Only one device appears because the
+throwaway account has no phone.
+
+Getting here needed all three steps below.
 
 ## What group membership needs (the next build chunk)
 
@@ -21,16 +23,11 @@ enrolled.
 2. **Enroll the `DeviceSync:BetterTogether` key bundle.** ✅ Done. Enrollment
    now runs both bundles (`enrollSingleKeyResponses: [{}, {}]`), keys saved to
    `device_keys.json`.
-3. **Group metadata.** ⬜ The remaining blocker. Retried syncMetadata still
-   returns 400 because the request must carry `group_public_key` and
-   `encrypted_metadata` (cryptauth_metadata_syncer_impl.cc:491-495). That needs:
-   - a **group key pair** (P256) the device creates for the account's group;
-   - the local **BetterTogetherDeviceMetadata** (device_id, name, public key,
-     Bluetooth address, feature support) — see
-     cryptauth_better_together_device_metadata.proto;
-   - that metadata **encrypted with the group key**, and
-     `need_group_private_key` set.
-   This is the next build chunk: group-key creation + metadata encryption.
+3. **Group metadata.** ✅ Done. The device creates a group key pair, builds
+   its BetterTogetherDeviceMetadata, and encrypts it with the group key using
+   Google's securemessage scheme (AES-256-CBC + HMAC-SHA256, master key =
+   SHA256(ECDH); ported in `securemessage.py`, round-trip unit-tested). The
+   server accepted it on the first try.
 
 ## Where this leaves feasibility
 
