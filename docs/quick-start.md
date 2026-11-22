@@ -73,3 +73,18 @@ checks). The remaining work is live networking + the phone.
 Done so far ties together: UKEY2 yields the `auth_string`, which the Quick Start
 AES-GCM handshake (already built) consumes. The gap is the transport that carries
 these messages.
+
+## Medium verified against a real phone (milestone)
+
+Running the `serve` advertiser, the **phone discovered the Mac in Quick Share**.
+This proves the whole macOS Nearby Connections medium is correct end to end:
+Bonjour service name (`[0x23, endpointId×4, serviceIdHash×3, 0,0]` base64url),
+`_FC9F5ED42C8A._tcp.`, the `n=` TXT endpoint_info ([deviceType<<1][16 rand][name
+len][name]), and the TCP listener. The "can macOS do this at all" question is
+answered: yes.
+
+Remaining to reach Quick Start: swap the Quick Share service id for the Quick
+Start one (different service type + hash — extract from Chromium's
+target_device_connection_broker), and the connection orchestration
+(ConnectionRequest ↔ UKEY2 ↔ ConnectionResponse ↔ Quick Start AES-GCM handshake
+↔ payloads), all of which reuse the pieces already built and tested here.
