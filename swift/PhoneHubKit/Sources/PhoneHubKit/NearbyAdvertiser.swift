@@ -18,6 +18,7 @@ public final class NearbyAdvertiser: NSObject {
 
     private var listener: NWListener!
     private var service: NetService?
+    private var connections: [NearbyConnection] = []  // retain live connections
     private let name: String
     private let serviceType: String
     private let serviceIdHash: [UInt8]
@@ -50,6 +51,7 @@ public final class NearbyAdvertiser: NSObject {
         listener.newConnectionHandler = { conn in
             print("!! phone connected:", conn.endpoint)
             let nearby = NearbyConnection(FrameConnection(conn))
+            self.connections.append(nearby)  // retain it
             nearby.start()
         }
         listener.stateUpdateHandler = { state in
