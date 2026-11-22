@@ -69,7 +69,20 @@ public enum Enrollment {
         return "token: \(token.prefix(12))…\n" + String(decoding: json, as: UTF8.self)
     }
 
+    /// The enrolled device identity needed by DeviceSync.
+    public struct Enrolled {
+        public let token: String
+        public let instanceId: String
+        public let gcmToken: String
+        public let betterTogetherKeyMaterial: Data
+    }
+
     public static func enroll(email: String, masterToken: String) async throws -> String {
+        let d = try await enrollReturningIdentity(email: email, masterToken: masterToken)
+        return "enrolled device \(d.instanceId) (both key bundles, 200)"
+    }
+
+    public static func enrollReturningIdentity(email: String, masterToken: String) async throws -> Enrolled {
         let token = try await GoogleAuth.cryptAuthToken(email: email, masterToken: masterToken)
         let (instanceId, gcmToken) = try await Gcm.token()  // real GCM registration
         let longDeviceId = UUID().uuidString.lowercased()
@@ -93,14 +106,18 @@ public enum Enrollment {
             throw EnrollError(message: "syncKeys \(syncCode): \(String(decoding: syncData, as: UTF8.self))")
         }
 
+        let userReq = keyRequest(sessionIdB64: session, keyName: "PublicKey", fixedHandle: Data("device_key".utf8))
+        let btReq = keyRequest(sessionIdB64: session, keyName: "DeviceSync:BetterTogether", fixedHandle: nil)
         let enrollBody: [String: Any] = [
             "randomSessionId": session,
-            "enrollSingleKeyRequests": [
-                keyRequest(sessionIdB64: session, keyName: "PublicKey", fixedHandle: Data("device_key".utf8)),
-                keyRequest(sessionIdB64: session, keyName: "DeviceSync:BetterTogether", fixedHandle: nil),
-            ],
+            "enrollSingleKeyRequests": [userReq, btReq],
         ]
         let (enrollCode, enrollData) = try await post(base + "v1:enrollKeys", token: token, body: enrollBody)
-        return "syncKeys 200, enrollKeys \(enrollCode): \(String(decoding: enrollData, as: UTF8.self))"
+        guard enrollCode == 200 else {
+            throw EnrollError(message: "enrollKeys \(enrollCode): \(String(decoding: enrollData, as: UTF8.self))")
+        }
+        let btMaterial = Data(base64Encoded: btReq["keyMaterial"] ?? "") ?? Data()
+        return Enrolled(token: token, instanceId: instanceId, gcmToken: gcmToken,
+                        betterTogetherKeyMaterial: btMaterial)
     }
 }

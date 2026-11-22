@@ -9,6 +9,8 @@ do {
         print(try await Enrollment.enroll(email: args[2], masterToken: args[3]))
     } else if args.count == 4 && args[1] == "diag" {
         print(try await Enrollment.diag(email: args[2], masterToken: args[3]))
+    } else if args.count == 4 && args[1] == "sync" {
+        print(try await DeviceSync.enrollAndSync(email: args[2], masterToken: args[3]))
     } else if args.count == 5 && args[1] == "cam" {
         print(Enrollment.metadataB64(instanceId: args[2], gcmToken: args[3], longDeviceId: args[4]))
     } else {

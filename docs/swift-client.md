@@ -66,11 +66,12 @@ on-device.
 1. **Port the crypto** (offline). securemessage, EID, weave, session keys,
    channel → Swift, each with its Python test ported. Fully verifiable without a
    phone.
-2. **Enrollment + DeviceSync in Swift** (testable against the server with the
-   throwaway account). ✅ Enrollment done & verified live — account auth, real
-   GCM (Android check-in + register3), CHROME syncKeys/enrollKeys all return 200,
-   matching the Python. ClientAppMetadata is byte-identical to the Python. ⬜
-   DeviceSync (syncMetadata) still to port (reuses the Swift securemessage).
+2. **Enrollment + DeviceSync in Swift** — ✅ done & verified live. Account auth,
+   real GCM (Android check-in + register3), CHROME syncKeys/enrollKeys (200), and
+   DeviceSync syncMetadata (200, the Mac joins the Better Together group) all work
+   against the real server. ClientAppMetadata is byte-identical to the Python and
+   the securemessage is wire-compatible. The whole server side now has Swift↔Python
+   parity.
 3. **CoreBluetooth scan/connect** (needs phone). Find and GATT-connect the phone.
 4. **Pairing** (needs phone). Reproduce the setup/PIN flow.
 5. **Handshake + secure channel end-to-end** (needs phone). First encrypted
