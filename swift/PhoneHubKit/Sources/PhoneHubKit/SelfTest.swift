@@ -36,6 +36,8 @@ public enum SelfTest {
         print("ok  uWeave fragmentation + counter enforcement")
         try quickStart()
         print("ok  Quick Start QR + AES-GCM handshake round-trip")
+        try ukey2()
+        print("ok  UKEY2 handshake — both sides derive the same secret + auth")
         print("all passed")
     }
 
@@ -122,6 +124,15 @@ public enum SelfTest {
         try check(!QuickStart.verifyHandshakeMessage(
             msg, secret: b.sharedSecret, expectedRole: QuickStart.roleTarget,
             expectedAuthString: "nope"), "wrong auth string rejected")
+    }
+
+    static func ukey2() throws {
+        let (client, server) = try Ukey2.selfHandshake()
+        try check(client == server, "UKEY2 both sides match")
+        try check(client.nextSecret.count == 32 && !client.authString.isEmpty, "UKEY2 outputs sized")
+        // a second handshake yields different secrets
+        let (c2, _) = try Ukey2.selfHandshake()
+        try check(c2.nextSecret != client.nextSecret, "fresh handshake differs")
     }
 
     static func weave() throws {

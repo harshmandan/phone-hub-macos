@@ -46,7 +46,21 @@ mechanism than the BLE Better Together link we were stuck on.
   auth_string}, roles target=1 / source=2). Round-trip unit-tested.
 - ✅ `qr` command renders a scannable QR PNG (CoreImage) — to test whether a
   real phone recognises our Quick Start QR format.
-- ⬜ **Nearby Connections** — the bulk. BLE + Wi-Fi mediums, UKEY2, framing;
-  `auth_string` comes from this session. Best bootstrapped from NearDrop /
-  rquickshare, which already run Nearby Connections on macOS.
+- ✅ **UKEY2 handshake** (`Ukey2.swift`) — the security core of Nearby
+  Connections. P256 ECDH → SHA256 → HKDF with salts "UKEY2 v1 next" / "UKEY2 v1
+  auth" over the two init messages (ported from google/ukey2). Both sides derive
+  the same next-secret + auth string; round-trip unit-tested. Reuses our
+  SecureMessage ECDH + GenericPublicKey.
+- ⬜ **Nearby Connections transport** — the remaining bulk:
+  - OfflineFrames connection protocol (CONNECTION_REQUEST / RESPONSE / KEEP_ALIVE
+    / PAYLOAD_TRANSFER frames) on top of the UKEY2-secured channel;
+  - the mediums: BLE advertising + GATT for discovery, then mDNS + TCP (Wi-Fi
+    LAN) for bandwidth — the approach NearDrop uses on macOS to sidestep the
+    CoreBluetooth advertising limits;
+  - discovery / endpoint advertising with the advertising_id.
+  Best adapted from NearDrop (Swift/macOS) or rquickshare (Rust).
 - ⬜ second-device auth / account transfer.
+
+Done so far ties together: UKEY2 yields the `auth_string`, which the Quick Start
+AES-GCM handshake (already built) consumes. The gap is the transport that carries
+these messages.
