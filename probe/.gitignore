@@ -5,3 +5,4 @@ __pycache__/
 # never commit account secrets
 secrets.txt
 tokens.txt
+device_keys.json

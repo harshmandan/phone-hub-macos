@@ -18,13 +18,19 @@ enrolled.
    Android check-in (synthetic device profile) then registers
    com.google.android.gms, and returns a valid InstanceID token. The old
    `PHONE_REGISTRATION_ERROR` was from checking in as a Chrome browser.
-2. **Enroll the `DeviceSync:BetterTogether` key bundle.** We only enrolled the
-   user `PublicKey` bundle. The group uses a separate device key
-   (`kCryptAuthDeviceSyncBetterTogetherKeyName`). syncKeys/enrollKeys must run
-   for that bundle too.
-3. **Group metadata.** First syncMetadata sends the device's own
-   `group_public_key` and `encrypted_metadata` (the ClientAppMetadata encrypted
-   with the group key). The server then returns the full group.
+2. **Enroll the `DeviceSync:BetterTogether` key bundle.** ✅ Done. Enrollment
+   now runs both bundles (`enrollSingleKeyResponses: [{}, {}]`), keys saved to
+   `device_keys.json`.
+3. **Group metadata.** ⬜ The remaining blocker. Retried syncMetadata still
+   returns 400 because the request must carry `group_public_key` and
+   `encrypted_metadata` (cryptauth_metadata_syncer_impl.cc:491-495). That needs:
+   - a **group key pair** (P256) the device creates for the account's group;
+   - the local **BetterTogetherDeviceMetadata** (device_id, name, public key,
+     Bluetooth address, feature support) — see
+     cryptauth_better_together_device_metadata.proto;
+   - that metadata **encrypted with the group key**, and
+     `need_group_private_key` set.
+   This is the next build chunk: group-key creation + metadata encryption.
 
 ## Where this leaves feasibility
 

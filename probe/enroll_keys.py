@@ -52,28 +52,62 @@ def _generic_public_key(pub: ec.EllipticCurvePublicKey) -> bytes:
     return pb.varint(1, PUBLIC_KEY_TYPE_EC_P256) + pb.message(2, ec_p256)
 
 
-def build_enroll_single_key_request(random_session_id_b64: str) -> dict:
-    """Return the JSON EnrollSingleKeyRequest for the device key.
+def _b64(b: bytes) -> str:
+    return base64.b64encode(b).decode("ascii")
 
-    random_session_id_b64 is the string syncKeys returned (base64 of the
-    session bytes). The proof is signed over the raw session bytes.
+
+def _derive_handle(key_material: bytes) -> bytes:
+    """Non-fixed keys: base64url(SHA256(key_material)) with padding.
+
+    From cryptauth_key.cc CreateHandle. The user key pair overrides this with
+    the fixed handle "device_key".
+    """
+    import hashlib
+
+    return base64.urlsafe_b64encode(hashlib.sha256(key_material).digest())
+
+
+def build_key_request(random_session_id_b64: str, key_name: str,
+                      fixed_handle: bytes | None = None) -> tuple[dict, bytes, bytes]:
+    """Build one EnrollSingleKeyRequest.
+
+    Returns (request_json, private_key_pkcs8_pem, key_material). The private key
+    and material are returned so the caller can persist the key (needed later
+    for DeviceSync group metadata).
+
+    random_session_id_b64 is syncKeys' session string; the proof is signed over
+    its raw bytes.
     """
     session_bytes = base64.b64decode(random_session_id_b64)
 
     priv = ec.generate_private_key(ec.SECP256R1())
-    pub = priv.public_key()
-
-    key_material = _generic_public_key(pub)
+    key_material = _generic_public_key(priv.public_key())
+    handle = fixed_handle if fixed_handle is not None else _derive_handle(key_material)
 
     # Key proof: ECDSA-SHA256 over salt + session bytes (DER signature).
     key_proof = priv.sign(KEY_PROOF_SALT + session_bytes, ec.ECDSA(hashes.SHA256()))
 
-    def b64(b: bytes) -> str:
-        return base64.b64encode(b).decode("ascii")
+    from cryptography.hazmat.primitives import serialization
 
-    return {
-        "keyName": KEY_NAME,
-        "newKeyHandle": b64(KEY_HANDLE),
-        "keyMaterial": b64(key_material),
-        "keyProof": b64(key_proof),
+    priv_pem = priv.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    request = {
+        "keyName": key_name,
+        "newKeyHandle": _b64(handle),
+        "keyMaterial": _b64(key_material),
+        "keyProof": _b64(key_proof),
     }
+    return request, priv_pem, key_material
+
+
+def build_enroll_single_key_request(random_session_id_b64: str) -> dict:
+    """Backward-compatible helper for the user key pair only."""
+    req, _, _ = build_key_request(random_session_id_b64, KEY_NAME, KEY_HANDLE)
+    return req
+
+
+# Bundle names (cryptauth_enrollment_constants.cc).
+BETTER_TOGETHER_KEY_NAME = "DeviceSync:BetterTogether"

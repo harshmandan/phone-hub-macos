@@ -105,11 +105,13 @@ def main() -> None:
         instance_id, gcm_token, long_device_id
     )
 
+    # Enroll both bundles: the user "PublicKey" and "DeviceSync:BetterTogether".
     sync_body = {
         "applicationName": "com.google.android.gms",
         "clientVersion": "1.0.0",
         "syncSingleKeyRequests": [
-            {"keyName": "PublicKey", "keyHandles": "ZGV2aWNlX2tleQo="}
+            {"keyName": "PublicKey", "keyHandles": ["ZGV2aWNlX2tleQo="]},
+            {"keyName": "DeviceSync:BetterTogether"},
         ],
         "clientMetadata": {"invocationReason": "NEW_ACCOUNT"},
         "clientAppMetadata": client_app_metadata,
@@ -135,22 +137,46 @@ def main() -> None:
 
     print(">>> GATE 2 PASSED: CHROME enrollment accepted. session:", session_id)
     print()
-    print("=== enrollKeys (real device key) ===")
-    from enroll_keys import build_enroll_single_key_request
+    print("=== enrollKeys (user key + BetterTogether key) ===")
+    from enroll_keys import build_key_request, KEY_NAME, KEY_HANDLE, BETTER_TOGETHER_KEY_NAME
 
-    # P256 device key: no clientEphemeralDh (that is only for symmetric keys).
+    user_req, user_priv, user_mat = build_key_request(session_id, KEY_NAME, KEY_HANDLE)
+    bt_req, bt_priv, bt_mat = build_key_request(session_id, BETTER_TOGETHER_KEY_NAME)
+
+    # P256 keys: no clientEphemeralDh (that is only for symmetric keys).
     enroll_body = {
         "randomSessionId": session_id,
-        "enrollSingleKeyRequests": [build_enroll_single_key_request(session_id)],
+        "enrollSingleKeyRequests": [user_req, bt_req],
     }
     code, text = post(ENROLL_KEYS, auth_token, enroll_body)
     print("HTTP", code)
     print(text)
     print()
     if code == 200:
-        print(">>> enrollKeys accepted. The device key is enrolled.")
-        print(">>> GATE 3: check the phone — Settings > Google > Devices & sharing.")
-        print(">>> A new Chromebook there = feasibility fully proven.")
+        # Persist the device identity and keys for DeviceSync group metadata.
+        import base64 as _b64mod
+
+        keystore = {
+            "instanceId": instance_id,
+            "gcmToken": gcm_token,
+            "longDeviceId": long_device_id,
+            "keys": {
+                KEY_NAME: {
+                    "handle": user_req["newKeyHandle"],
+                    "privatePem": user_priv.decode(),
+                    "keyMaterial": _b64mod.b64encode(user_mat).decode(),
+                },
+                BETTER_TOGETHER_KEY_NAME: {
+                    "handle": bt_req["newKeyHandle"],
+                    "privatePem": bt_priv.decode(),
+                    "keyMaterial": _b64mod.b64encode(bt_mat).decode(),
+                },
+            },
+        }
+        with open("device_keys.json", "w") as f:
+            json.dump(keystore, f, indent=2)
+        print(">>> enrollKeys accepted. Both keys enrolled; saved to device_keys.json.")
+        print(">>> Next: DeviceSync (./device_sync.py) should now get past 400.")
     else:
         print(">>> enrollKeys rejected. If the error names key_material, the")
         print(">>> public-key encoding in enroll_keys.py needs adjusting.")

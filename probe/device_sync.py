@@ -71,10 +71,14 @@ def main() -> None:
         print("could not get cryptauth token:", res)
         sys.exit(1)
 
-    # Reuse the enrolled device identity for consistency.
-    from probe_enroll import get_gcm
-
-    instance_id, gcm_token = get_gcm()
+    # Reuse the enrolled device identity saved by probe_enroll.
+    try:
+        with open("device_keys.json") as f:
+            ks = json.load(f)
+        instance_id, gcm_token = ks["instanceId"], ks["gcmToken"]
+    except FileNotFoundError:
+        print("No device_keys.json — run probe_enroll.py first.")
+        sys.exit(1)
 
     body = {
         "context": {
@@ -83,7 +87,11 @@ def main() -> None:
             "deviceId": instance_id,
             "deviceIdToken": gcm_token,
         },
-        "needGroupPrivateKey": False,
+        # NOTE: 400 until group metadata is added here —
+        #   "groupPublicKey": <group key pair public>,
+        #   "encryptedMetadata": <BetterTogetherDeviceMetadata, encrypted>,
+        # per cryptauth_metadata_syncer_impl.cc. See docs/devicesync.md step 3.
+        "needGroupPrivateKey": True,
     }
 
     print("=== syncMetadata ===")
