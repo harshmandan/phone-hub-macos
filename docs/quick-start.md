@@ -305,3 +305,234 @@ Path A (ESP32) first — ₹649, near-zero setup — to settle the one open ques
 does the beacon make the phone show "Set up this Chromebook"? (phone-side match is
 closed GMS, so this is empirical.) If it does, adopt Path B (Bumble + nRF52840 dongle)
 as the platform for the actual build.
+
+## Phone-side cold launch — the beacon trigger is bypassable (2026-11-23)
+
+Tested on the live phone (M2101K6P, GMS). The Fast Pair beacon's only job is to push
+the phone into the Quick Start **Source** flow. That flow can be opened directly, with
+no beacon and no radio:
+
+```
+adb shell am start -a com.google.android.gms.smartdevice.quickstart.SOURCE_DEVICE_SETUP
+```
+
+Resolves to `com.google.android.gms/.smartdevice.quickstart.ui.SourceQuickStartActivity`,
+**`exported=true`** (launchable from shell UID). It opened the real UI:
+"keep both devices close until setup is complete" / "continue setup on your new device".
+So the phone enters the setup flow from the phone side — the beacon is not required to
+get here.
+
+Related exported entry points (all `com.google.android.gms.smartdevice.quickstart.*`):
+`SOURCE_DEVICE_SETUP`, `SOURCE_FLOW_START`, `TARGET_DEVICE_SETUP`, `HALF_SHEET_ACTIVITY`.
+`LANDING_SCREEN` is `exported=false`. Gated by signature perm
+`com.google.android.gms.smartdevice.permission.NOTIFY_QUICK_START_STATUS`.
+
+### The caveat (from logcat)
+
+```
+SmartDevice: [SourceQuickStartChimeraActivity] Connection request is present: false
+```
+
+Launched cold, the activity has **no connection-request extra** — the discovered-endpoint
+payload that the beacon→notification path normally hands it. So it sits on the
+instructional screen ("continue setup on your new device") waiting for the **target** to
+become discoverable, rather than dialing a specific endpoint. All the Nearby Connections
+discovery visible in the log (`startDiscovery in nc mode`, `onEndpointFound(I4C6)`) is
+attributed to `com.google.android.gms.nearby.sharing` — ambient Quick Share, **not** this
+flow.
+
+### What this changes
+
+- The C6 Fast Pair beacon is no longer on the critical path for the *trigger*. We can put
+  the phone into the Source flow with one adb command.
+- The remaining task is unchanged in spirit but clearer: the Mac must advertise a **Nearby
+  Connections Target endpoint** declaring **device type = Chrome (8)**, so the waiting
+  phone discovers it and connects. That is the `qsserve` discovery/advertising layer.
+- Open question for the next session: does the phone, from this "continue setup on your
+  new device" screen, actively discover a Target that advertises an NC endpoint — or does
+  it still need the connection-request extra injected? Decisive test = stand up the Mac NC
+  Target advertiser (device type Chrome) and watch whether the phone connects. Medium is
+  likely NC "fast" BLE advertisement (service UUID 0xFEF3 + endpoint info — custom service
+  data, so still needs an external radio or a dongle) or Bluetooth Classic SDP (doable on
+  macOS via IOBluetooth, no extra radio). Confirm by decompiling the GMS `smartdevice`
+  module or by trying the BT-Classic advertiser first.
+
+## Mac NC-endpoint spec — from GMS 26.45.31 decompile (2026-11-23)
+
+Decompiled `base.apk` (code is all in `classes*.dex`, not Chimera modules). Concrete
+values the Mac must match to be the Quick Start **Target**:
+
+- **Nearby Connections service ID**: `com.google.android.gms.smartdevice.NC_ID`
+  (phenotype `nearby_connections_service_id`; same for source and target).
+- **Strategy**: `P2P_POINT_TO_POINT`.
+- **Mediums**:
+  - Source **discovers** over `{BLE(4), Bluetooth-Classic(2)}` by default (BLE-only if a
+    phenotype flag is set).
+  - Target **advertises** over `{Bluetooth-Classic(2), BLE(4)}`, upgrade over both.
+  - The actual data **connection** (requestConnection ConnectionOptions) is **Bluetooth
+    Classic (2)**.
+  - **So the Mac can be the Target over Bluetooth Classic natively (IOBluetooth RFCOMM) —
+    no external BLE radio needed.** The C6 is off the critical path for both trigger and
+    transport.
+- **BLE fast-adv UUID** (if the BLE path is ever used): `0000FEF3-0000-1000-8000-00805F9B34FB`.
+
+### Target endpoint-info byte layout (what the Mac advertises / the phone parses)
+
+Wrapper `ConnectionsAdvertisementV1` (`ghny`): `0x01` version + deviceName (UTF-8,
+null-terminated) + Base64(`AdvertisementDataV1`), padded to 60 bytes when the long-id flag
+is set. `AdvertisementDataV1` (`ghns`) bytes:
+
+| byte | meaning |
+|------|---------|
+| b[0] | verification style |
+| **b[1]** | **device type — `8` = CHROME** (enum `ghpc`; Chromebook target = 8) |
+| b[2..6] or b[2..11] | advertising id (UTF-8; 5 bytes, or 10 when b[12]=1) |
+| b[7],b[8] | sub-field of the id region |
+| b[12] | long-id / Quick Start flag (1 ⇒ 10-byte id) |
+| b[13] | pin/verification UI style |
+| b[14] | capability byte |
+| b[15] | pin-fallback-supported (1=yes) |
+
+(Note: a *different* enum `ggyy` uses Chrome=7 for `D2DDevice` name-mapping; but the byte
+written into the NC advertisement is `ghpc`, Chrome=**8**.)
+
+### Two ways to trigger the Source (both from adb, no beacon)
+
+1. **Discovery route** — `am start -a ...SOURCE_DEVICE_SETUP` with a **`deeplink` Uri**
+   extra. `SourceQuickStartChimeraActivity` reads advertisingId = `uri.getLastPathSegment()`
+   and OOB key = `uri.getQueryParameter("key")`, builds a `ConnectionRequest` with
+   device=null → the source then **discovers** (BLE+BT-Classic) for a Target advertising
+   that advertising id. Mac must advertise the endpoint (above) with the matching id.
+
+2. **Direct-inject route (skips discovery)** — provide a full `ConnectionRequest` whose
+   `D2DDevice` is non-null. `D2DSetupChimeraActivity` reads a **String extra
+   `"connectionRequest"`** = Base64 SafeParcelable (`brpg.c(..., ConnectionRequest.CREATOR)`);
+   the binder `ISourceQuickStartService.connect(...)` takes one too. When `D2DDevice` is set
+   (+ a flag), the source connector **skips discovery and requestConnection's straight to the
+   endpoint** (`ghbf.java:241`), using `D2DDevice.deviceId` (= NC endpoint id) and
+   `bluetoothMacAddr`. Populate `D2DDevice{deviceId, bluetoothMacAddr=<Mac BT MAC>,
+   deviceType=CHROME}` → the phone dials the Mac's RFCOMM endpoint directly. Most
+   deterministic; immune to the BLE-only discovery flag.
+
+`ConnectionRequest` fields: `device(D2DDevice), pin, deeplinkPairingCode(=advertisingId),
+fastpairCode(byte[]), outOfBandKey, triggerType(int), isQuickStartReconnect, isQuickStartConnection,
+requiresLongTimeout, oemType(int), targetDeviceType(int)`.
+`D2DDevice` fields: `protocol(int, default 2), name, deviceId, deviceType(byte), btUuid(dep),
+cryptAuthHello(byte[], dep), bluetoothMacAddr, verificationStyle(int)`.
+
+### What's left to build (Mac side)
+
+The remaining work is a real protocol implementation, no longer a mystery gate: the Mac must
+speak **Nearby Connections over Bluetooth Classic** — RFCOMM service under service ID
+`com.google.android.gms.smartdevice.NC_ID`, P2P_POINT_TO_POINT, then the NC connection frames,
+UKEY2 auth, and the d2d / Better Together payload that actually flips Phone Hub on.
+
+**Existing Mac state (PhoneHubKit) vs the gap:** the Swift side already has the NC service
+id `com.google.android.gms.smartdevice.NC_ID`, the UKEY2 handshake → encrypted D2D channel
+(`NearbyConnection.swift`), NC framing (`NearbyFrames.swift`), enrollment/device-sync, and
+endpoint advertising — but its transport is **Wi-Fi LAN** (TCP socket + Bonjour/mDNS,
+`NearbyTransport.swift` / `NearbyAdvertiser.swift`). The decompile shows Quick Start's Source
+flow **does not discover or bootstrap over Wi-Fi LAN** — it discovers over `{BLE, BT-Classic}`
+and connects over **BT-Classic** (Wi-Fi LAN is only a post-bootstrap *upgrade* medium). That
+is why the mDNS advertiser is never found.
+
+**The one missing piece:** a **Bluetooth-Classic RFCOMM bootstrap transport** on macOS
+(IOBluetooth) under the NC service id, wired to the existing UKEY2/D2D/frame stack. The
+direct-inject route makes this tractable — tell the phone the Mac's BT MAC via a
+`connectionRequest`/`D2DDevice`, and it dials the Mac's RFCOMM channel directly (no inquiry
+or device-name advertising needed, just an SDP record + RFCOMM listener). After bootstrap,
+NC can upgrade to the existing Wi-Fi LAN transport for bulk data.
+
+### Build status (2026-11-23)
+
+`BluetoothClassicTransport.swift` is written and builds:
+- `NearbyBt.serviceUuidBytes` computes the SDP service UUID from the service id
+  (MD5 + v3/variant bits, confirmed against google/nearby `uuid.cc` /
+  `bluetooth_classic.cc`). For NC_ID = **`5e164731-1999-3405-9061-08a610fd3787`**
+  (runtime output matches).
+- `RfcommFrameChannel` conforms to the new `FrameChannel` protocol (so
+  `NearbyConnection`'s existing UKEY2/D2D state machine runs over it unchanged),
+  reassembling the 4-byte length-prefixed frames from the RFCOMM byte stream.
+- `RfcommNearbyServer` publishes the SDP record + accepts an incoming RFCOMM
+  channel and hands it to `NearbyConnection`. Prints this Mac's BT MAC.
+- Launch: `scripts/btserve.sh` (embeds `Info.plist` for the Bluetooth TCC usage
+  string) → `phonehubkit-selftest btserve [seconds]`.
+
+**Unverified / next (needs a real Terminal — the Claude sandbox blocks Bluetooth):**
+run `scripts/btserve.sh` to confirm the IOBluetooth runtime works — that
+`publishedServiceRecord(with:)` accepts the service dict and the open-notification
+registers — and to read the Mac's BT MAC. Then build the trigger: construct a
+serialized `ConnectionRequest{ D2DDevice{deviceId=<our NC endpoint id>,
+bluetoothMacAddr=<Mac MAC>, deviceType=CHROME} }` and
+`am start ...D2DSetupActivity --es connectionRequest <base64>` so the phone dials
+the Mac's RFCOMM endpoint directly.
+
+## Live BT-Classic session — what works, and the real wall (2026-11-23)
+
+Spent a long live session with the phone (M2101K6P) + btserve + HCI snoop. Net: the
+**Mac-side Bluetooth-Classic Nearby endpoint is fully validated**, but the **deeplink
+trigger is a dead end** — it never discovers. Details:
+
+### The `connectionRequest` inject is impossible
+`D2DDevice.writeToParcel` does **not** serialize `bluetoothMacAddr` (it's a JSON-only
+field, id 8, skipped by the parcel writer). So you cannot hand the phone the Mac's MAC.
+The "dial the Mac directly, skip discovery" plan is dead — the phone must *discover* the
+Mac, never be told where it is.
+
+### The Mac works as a BT-Classic Nearby endpoint (proven)
+`btserve` (RfcommNearbyServer) stands up correctly: SDP service published under
+UUID `5e164731-1999-3405-9061-08a610fd3787` (= MD5-name-UUID of the service id),
+RFCOMM channel, open-notification registered. The Mac broadcasts a valid Nearby
+Bluetooth-Classic advertisement **as its Bluetooth (Computer) name**. Confirmed on-air
+via the phone's HCI snoop: the phone's inquiry returned the Mac with a correct,
+untruncated advertisement — header `0x23` (v1 + P2P_POINT_TO_POINT), service hash
+`2d 10 3f` (= SHA256(service_id)[:3]), label "Chromebook", and the **advertising-id
+decoded byte-for-byte equal to the deeplink's** (`10ac991faacb361702b4`). The Mac side
+is correct.
+
+Two macOS constraints discovered the hard way:
+- **Discoverable only while the Bluetooth Settings pane is focused.** `blueutil
+  --discoverable 1` fails ("couldn't switch in 10s"); the private
+  `IOBluetoothPreferenceSetDiscoverableState` can't hold it headless. No way around this
+  on the built-in radio.
+- **The inquiry EIR truncates the Bluetooth name at ~128 chars.** The original
+  advertisement (60-byte-padded advertisement_data → ~160-char name) got chopped to 129
+  and was unparseable. Fix applied: short fixed device label + drop the 60-byte padding →
+  ~70-char name that fits intact. (Also fixed a feedback loop where btserve used the
+  current computer name — already the NC string — as the device label.)
+
+### The real wall: the deeplink does NO discovery
+HCI snoop + logcat together are decisive. The `signin.google/qs/...` deeplink (via
+`am start ... VIEW`) launches `SourceQuickStartActivity` → logs
+`[D2D,SourceDeviceConnectorNearbyConnections] Connect directly via out-of-band API`
+and then **starts no Nearby discovery of its own** (no `startDiscovery` for the
+quickstart client). The Bluetooth-Classic inquiry that *did* find the Mac was
+`startDiscovery package:com.android.settings` — the **phone's Settings app**, incidental,
+not Quick Start. The OOB path expects the endpoint to be **already cached from a
+background BLE scan**, which the Mac cannot populate (CoreBluetooth can't emit the NC
+BLE advertisement). So the deeplink can never find the Mac regardless of how perfect the
+BT-Classic side is. **The deeplink is the wrong trigger.**
+
+(Also observed: on this phone the running Nearby discovery — for Quick *Share* — uses
+`advertisingMediums:[BLE]`. If Quick Start's discovery is likewise BLE-only in practice,
+even the beacon flow wouldn't do a BT-Classic inquiry; untested.)
+
+### Where it stands / next (needs the C6)
+The only trigger that starts a real Quick Start discovery is the **Fast Pair beacon**
+(the C6's job) → "Set up this Chromebook" → full flow → Nearby Discoverer scanning
+`{BLE, BT-Classic}`. When the C6 arrives:
+1. Flash the beacon firmware (`firmware/chromebook_beacon`, already written).
+2. Run `scripts/btserve.sh`, set the printed (short) `ComputerName`, Bluetooth pane
+   focused.
+3. C6 emits the beacon; watch via HCI snoop whether the beacon-triggered discovery does a
+   BT-Classic inquiry and finds + connects to the Mac.
+4. If that discovery is BLE-only, the C6 must instead emit the **NC BLE advertisement**
+   (0xFEF3 + endpoint info), not just the Fast Pair beacon.
+
+### Tooling added
+- `scripts/btserve.sh` prints the `scutil --set ComputerName` line + the `adb` trigger.
+- HCI snoop workflow (no root): enable "Bluetooth HCI snoop log" in Developer Options,
+  **toggle Bluetooth to activate it**, then `adb bugreport <zip>` contains
+  `FS/data/misc/bluetooth/logs/btsnoop_hci.log`. Parser:
+  `scratchpad/snoop.py` decodes inquiry / connection / the Mac's advertisement.
+- The Nearby BT-Classic name is computed by `NearbyBt.btClassicDeviceName`.
