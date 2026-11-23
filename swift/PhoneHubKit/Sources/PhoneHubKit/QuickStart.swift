@@ -22,7 +22,9 @@ public enum QuickStart {
     }
 
     public static func newBootstrap() -> Bootstrap {
-        Bootstrap(advertisingId: randomData(10), sharedSecret: randomData(32))
+        // advertising id is 6 bytes (AdvertisingId::kLength = 6 in Chromium); the
+        // endpoint info carries base64url(no-pad) of them = 8 ASCII chars.
+        Bootstrap(advertisingId: randomData(6), sharedSecret: randomData(32))
     }
 
     /// A bootstrap that persists across runs (so the Mac's Bluetooth name + the

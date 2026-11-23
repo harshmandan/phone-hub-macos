@@ -146,7 +146,12 @@ public final class RfcommFrameChannel: NSObject, FrameChannel, IOBluetoothRFCOMM
 public final class RfcommNearbyServer: NSObject {
     private let name: String
     private let channelID: BluetoothRFCOMMChannelID
-    private let bootstrap = QuickStart.loadOrCreateBootstrap()   // stable across runs
+    // Fixed test bootstrap so the C6 beacon and btserve share the SAME 6-byte
+    // advertising id: the beacon emits these raw bytes, we advertise base64url of
+    // them. Keep in sync with ADVERTISING_ID in firmware/chromebook_beacon.
+    private let bootstrap = QuickStart.Bootstrap(
+        advertisingId: Data([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
+        sharedSecret: Data(repeating: 0x5a, count: 32))
     private var serviceRecord: IOBluetoothSDPServiceRecord?
     private var openNote: IOBluetoothUserNotification?
     private var channels: [RfcommFrameChannel] = []
