@@ -21,8 +21,15 @@ do {
         let url = QuickStart.qrURL(b)
         _ = QrImage.writePNG(url, to: "/tmp/quickstart-qr.png")
         print("QR: \(url)\n     (also /tmp/quickstart-qr.png)")
+        if let term = QrImage.terminalQR(url) { print(term) }
         let secs = args.count >= 3 ? (Double(args[2]) ?? 180) : 180
-        NearbyAdvertiser.quickStart(name: Host.current().localizedName ?? "Mac", advertisingId: b.advertisingId).run(seconds: secs)
+        NearbyAdvertiser.quickStart(name: Host.current().localizedName ?? "Mac", advertisingId: b.advertisingId, sharedSecret: b.sharedSecret).run(seconds: secs)
+    } else if args.count >= 2 && args[1] == "btserve" {
+        // Nearby Connections over Bluetooth Classic (RFCOMM) — the medium Quick
+        // Start actually bootstraps on. Prints this Mac's BT MAC for the injected
+        // D2DDevice.bluetoothMacAddr.
+        let secs = args.count >= 3 ? (Double(args[2]) ?? 180) : 180
+        RfcommNearbyServer(name: Host.current().localizedName ?? "Mac").run(seconds: secs)
     } else if args.count >= 2 && args[1] == "serve" {
         let secs = args.count >= 3 ? (Double(args[2]) ?? 120) : 120
         NearbyAdvertiser(name: Host.current().localizedName ?? "Mac").run(seconds: secs)
