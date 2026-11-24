@@ -51,6 +51,11 @@ public final class BleRadio: NSObject {
     private var crosStateTimer: Timer?
     private var gotTether = false
     private var sentConnect = false
+    // CoreBluetooth's connect() has no timeout: a weak-signal peripheral can leave
+    // the connect pending forever with no didConnect/didFailToConnect callback.
+    // Bound it so we cancel and rescan instead of stalling silently.
+    private var connectTimer: Timer?
+    private let connectTimeout: TimeInterval = 12
 
     /// Called with each fully-reassembled secure-channel message.
     public var onMessage: ((Data) -> Void)?
@@ -58,6 +63,11 @@ public final class BleRadio: NSObject {
     /// its Nearby Connections "secure_channel" listener while this BLE channel is
     /// up, so this is the moment to open the Phone Hub NC connection.
     public var onAuthenticated: (() -> Void)?
+    /// When this radio is used only to ARM the phone's Nearby listener (the Phone
+    /// Hub path), set false so it does NOT send ConnectTetheringRequest. That
+    /// request turns the phone's hotspot ON, which reconfigures Wi-Fi and drops
+    /// Wi-Fi adb / any Wi-Fi link mid-session. Standalone tether demos leave it true.
+    public var autoConnectTether = true
     private var firedAuthenticated = false
 
     public init(remoteSeeds: [Eid.BeaconSeed],
@@ -138,6 +148,7 @@ public final class BleRadio: NSObject {
     /// `writing`/the weave receiver stay stale and the new channel is dead).
     private func resetSession() {
         crosStateTimer?.invalidate(); crosStateTimer = nil
+        connectTimer?.invalidate(); connectTimer = nil
         helloSent = false
         writing = false
         writeQueue.removeAll()
@@ -173,13 +184,33 @@ extension BleRadio: CBCentralManagerDelegate {
         guard let eidData = serviceData[Self.advertServiceUUID],
               Eid.matches(advertisementServiceData: eidData, remoteSeeds: remoteSeeds, nowMs: now) else { return }
         log("★ phone found — FE50=\(eidData.hex) rssi=\(RSSI) name=\(peripheral.name ?? "?"); connecting …")
+        if RSSI.intValue < -90 {
+            log("⚠︎ very weak signal (\(RSSI) dBm) — move the phone closer; the link may stall or drop")
+        }
         central.stopScan()
         self.peripheral = peripheral
         peripheral.delegate = self
         central.connect(peripheral)
+        startConnectTimer()
+    }
+
+    /// Cancel a stalled connect and resume scanning. Without this a weak link leaves
+    /// connect() pending with no callback, which looks like a hang.
+    private func startConnectTimer() {
+        connectTimer?.invalidate()
+        connectTimer = Timer.scheduledTimer(withTimeInterval: connectTimeout, repeats: false) { [weak self] _ in
+            guard let self, let p = self.peripheral else { return }
+            self.log("connect timed out after \(Int(self.connectTimeout))s (weak link?) — cancelling + rescanning")
+            self.central.cancelPeripheralConnection(p)
+            self.peripheral = nil
+            self.resetSession()
+            self.central.scanForPeripherals(withServices: nil,
+                options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        }
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        connectTimer?.invalidate(); connectTimer = nil
         log("connected ✅ — discovering weave service b3b7e28e …")
         peripheral.discoverServices([Self.gattServiceUUID])
     }
@@ -295,7 +326,7 @@ extension BleRadio: CBPeripheralDelegate {
                 // When the phone says tethering is available, ask it to start the
                 // hotspot and hand back Wi-Fi credentials (user-approved action —
                 // this turns the phone's hotspot on).
-                if t.type == Tether.availabilityResponse, t.available, !sentConnect, let ctx = context {
+                if autoConnectTether, t.type == Tether.availabilityResponse, t.available, !sentConnect, let ctx = context {
                     sentConnect = true
                     log("→ requesting hotspot (ConnectTetheringRequest) …")
                     sendMessage(ctx.encode(Tether.makeConnectRequest()), feature: Tether.feature,
