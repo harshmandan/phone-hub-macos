@@ -128,7 +128,11 @@ public final class RfcommFrameChannel: NSObject, FrameChannel, IOBluetoothRFCOMM
     // MARK: IOBluetoothRFCOMMChannelDelegate
     public func rfcommChannelData(_ rfcommChannel: IOBluetoothRFCOMMChannel!,
                                   data dataPointer: UnsafeMutableRawPointer!, length dataLength: Int) {
-        if dataLength > 0 { inBuffer.append(Data(bytes: dataPointer, count: dataLength)) }
+        if dataLength > 0 {
+            let chunk = Data(bytes: dataPointer, count: dataLength)
+            print("  rfcomm rx \(dataLength)B: \(chunk.prefix(64).map { String(format: "%02x", $0) }.joined())")
+            inBuffer.append(chunk)
+        }
         drain()
     }
 
@@ -145,7 +149,7 @@ public final class RfcommFrameChannel: NSObject, FrameChannel, IOBluetoothRFCOMM
 
 public final class RfcommNearbyServer: NSObject {
     private let name: String
-    private let channelID: BluetoothRFCOMMChannelID
+    private var channelID: BluetoothRFCOMMChannelID
     // Fixed test bootstrap so the C6 beacon and btserve share the SAME 6-byte
     // advertising id: the beacon emits these raw bytes, we advertise base64url of
     // them. Keep in sync with ADVERTISING_ID in firmware/chromebook_beacon.
@@ -204,7 +208,7 @@ public final class RfcommNearbyServer: NSObject {
 
         // Path A — Bluetooth-Classic discovery: the phone's Quick Start inquiry
         // finds the Mac by its Bluetooth (Computer) name. Set it to this NC name.
-        let eid = String((0..<4).map { _ in "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".randomElement()! })
+        let eid = "QSMC"   // fixed: must match ENDPOINT_ID in firmware/chromebook_beacon/gen_nc_advert.py
         // Fixed short label — NOT self.name (which is the computer name, i.e. this
         // very NC string → a feedback loop that bloats the advertisement each run).
         let info = NearbyAdvertiser.quickStartEndpointInfo(name: "Chromebook", advertisingId: bootstrap.advertisingId)
@@ -215,17 +219,35 @@ public final class RfcommNearbyServer: NSObject {
         print("  2) open System Settings ▸ Bluetooth (keeps the Mac inquiry-discoverable)")
         print("  3) run this to trigger the phone, then click the Bluetooth window and hold focus ~20s:")
         print("     adb shell \"am start -a android.intent.action.VIEW -d '\(QuickStart.qrURL(bootstrap))'\"")
+        print("  or scan this QR from the phone's Quick Start \"Set up\" sheet:")
+        print("     \(QuickStart.qrURL(bootstrap))")
+        if let qr = QrImage.terminalQR(QuickStart.qrURL(bootstrap)) { print(qr) }
 
         print("  publishing SDP service record…")
         serviceRecord = IOBluetoothSDPServiceRecord.publishedServiceRecord(with: serviceDict())
         print("  SDP record: \(serviceRecord == nil ? "FAILED" : "published")")
+        // macOS assigns a free RFCOMM channel (3 is usually taken by its own
+        // Bluetooth-Incoming-Port), but the record can still advertise the number
+        // we asked for — and the phone dials what the record says. Republish with
+        // the assigned channel so the advertised and listening channels agree.
+        var assigned: BluetoothRFCOMMChannelID = 0
+        if serviceRecord?.getRFCOMMChannelID(&assigned) == kIOReturnSuccess, assigned != channelID {
+            print("  macOS assigned RFCOMM channel \(assigned) (requested \(channelID)); republishing with \(assigned)")
+            serviceRecord?.remove()
+            channelID = assigned
+            serviceRecord = IOBluetoothSDPServiceRecord.publishedServiceRecord(with: serviceDict())
+            var again: BluetoothRFCOMMChannelID = 0
+            _ = serviceRecord?.getRFCOMMChannelID(&again)
+            print("  republished: record says channel \(again)")
+        } else {
+            print("  SDP record RFCOMM channel: \(assigned)")
+        }
 
-        print("  registering for incoming RFCOMM on channel \(channelID)…")
+        // Listen on every channel (incoming) so nothing is missed.
+        print("  registering for incoming RFCOMM on any channel…")
         openNote = IOBluetoothRFCOMMChannel.register(
             forChannelOpenNotifications: self,
-            selector: #selector(channelOpened(_:channel:)),
-            withChannelID: channelID,
-            direction: kIOBluetoothUserNotificationChannelDirectionIncoming)
+            selector: #selector(channelOpened(_:channel:)))
         print("  open-notification: \(openNote == nil ? "FAILED" : "registered")")
         print("  waiting \(Int(seconds))s for the phone to open the channel…")
 
@@ -236,9 +258,9 @@ public final class RfcommNearbyServer: NSObject {
     }
 
     @objc private func channelOpened(_ note: IOBluetoothUserNotification, channel: IOBluetoothRFCOMMChannel) {
-        guard channel.isIncoming() else { return }
         let dev = channel.getDevice()?.addressString ?? "?"
-        print("!! phone opened RFCOMM channel from \(dev)")
+        print("!! RFCOMM channel \(channel.getID()) opened, incoming=\(channel.isIncoming()) from \(dev)")
+        guard channel.isIncoming() else { return }
         let fc = RfcommFrameChannel(channel)
         let nearby = NearbyConnection(fc, quickStartSecret: bootstrap.sharedSecret)
         channels.append(fc)
