@@ -106,8 +106,10 @@ enum SecureMessage {
 
         var header = Pb.varint(1, sigHmacSha256) + Pb.varint(2, encAes256Cbc)
         if !decryptionKeyId.isEmpty { header += Pb.bytes(4, decryptionKeyId) }
-        if !publicMetadata.isEmpty { header += Pb.bytes(5, publicMetadata) }
-        header += Pb.bytes(7, iv)
+        // securemessage.proto Header: iv = 5, public_metadata = 6 (field order on
+        // the wire matches what a real phone sends: iv before metadata).
+        header += Pb.bytes(5, iv)
+        if !publicMetadata.isEmpty { header += Pb.bytes(6, publicMetadata) }
 
         let headerAndBody = Pb.bytes(1, header) + Pb.bytes(2, body)
         let sig = Data(HMAC<SHA256>.authenticationCode(for: headerAndBody, using: SymmetricKey(data: sigKey)))
@@ -129,9 +131,9 @@ enum SecureMessage {
         let header = Pb.readFields(hab.bytes(1) ?? Data())
         let body = hab.bytes(2) ?? Data()
         let encKey = hkdf(key, Data("ENC:2".utf8))
-        let iv = header.bytes(7) ?? Data()
+        let iv = header.bytes(5) ?? Data()
         let payload = aesCbc(encrypt: false, key: encKey, iv: iv, data: body)
-        return (payload, header.bytes(5) ?? Data())
+        return (payload, header.bytes(6) ?? Data())
     }
 
     // MARK: ECIES (encrypt to a public key)

@@ -32,11 +32,13 @@ final class SecureContext {
     }
 
     /// Explicit per-direction keys (Nearby Connections: d2dServerKey / d2dClientKey).
+    /// Nearby's D2D context starts both counters at 0, so the first message is
+    /// seq 1 (a live phone rejects seq 2 with "Incorrect sequence number").
     init(encodeKey: Data, decodeKey: Data) {
         self.encodeKey = encodeKey
         self.decodeKey = decodeKey
-        encodeSeq = Self.authSequenceNumber
-        decodeSeq = Self.authSequenceNumber
+        encodeSeq = 0
+        decodeSeq = 0
     }
 
     func encode(_ message: Data) -> Data {

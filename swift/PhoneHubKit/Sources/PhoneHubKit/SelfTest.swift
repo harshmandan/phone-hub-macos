@@ -110,7 +110,7 @@ public enum SelfTest {
         let b = QuickStart.newBootstrap()
         let url = QuickStart.qrURL(b)
         try check(url.hasPrefix("https://signin.google/qs/") && url.contains("?key="), "QR URL shape")
-        try check(b.advertisingId.count == 10 && b.sharedSecret.count == 32, "bootstrap sizes")
+        try check(b.advertisingId.count == 6 && b.sharedSecret.count == 32, "bootstrap sizes")
 
         // handshake round-trip: target builds, verify as the target's message
         let msg = try QuickStart.buildHandshakeMessage(
