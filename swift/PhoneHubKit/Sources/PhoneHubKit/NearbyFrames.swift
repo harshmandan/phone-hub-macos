@@ -48,15 +48,16 @@ public enum NearbyFrames {
     }
 
     /// A single-chunk BYTES payload carrying `body`.
-    public static func payloadBytes(id: Int64, body: Data, lastChunk: Bool = true) -> Data {
+    public static func payloadBytes(id: Int64, body: Data, lastChunk: Bool = true,
+                                    totalSize: Int? = nil, offset: Int = 0) -> Data {
         var header = Data()
         header += Pb.varint(1, UInt64(bitPattern: id))   // id
         header += Pb.varint(2, payloadTypeBytes)         // type = BYTES
-        header += Pb.varint(3, UInt64(body.count))       // total_size
+        header += Pb.varint(3, UInt64(totalSize ?? body.count))  // total_size
         var chunk = Data()
         chunk += Pb.varint(1, lastChunk ? 1 : 0)         // flags (1 = last)
-        chunk += Pb.varint(2, 0)                         // offset
-        chunk += Pb.bytes(3, body)                       // body
+        chunk += Pb.varint(2, UInt64(offset))            // offset
+        if !body.isEmpty { chunk += Pb.bytes(3, body) }  // body
         var pt = Data()
         pt += Pb.varint(1, packetData)                   // packet_type = DATA
         pt += Pb.message(2, header)                      // payload_header

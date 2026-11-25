@@ -28,6 +28,48 @@ public enum QuickStartMessages {
         return (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
     }
 
+    // MARK: FIDO account transfer (quick_start_requests.cc)
+
+    /// FIDO CollectedClientData as Chromium writes it (base::WriteJson sorts keys).
+    public static func clientDataJSON(challengeB64url: String) -> String {
+        "{\"challenge\":\"\(challengeB64url)\",\"crossOrigin\":false,\"origin\":\"https://accounts.google.com\",\"type\":\"webauthn.get\"}"
+    }
+
+    /// {"secondDeviceAuthPayload": {"fidoMessage": base64(ctap)}}
+    private static func secondDeviceAuth(_ ctap: Data) -> Data {
+        let obj: [String: Any] = ["secondDeviceAuthPayload": ["fidoMessage": ctap.base64EncodedString()]]
+        return (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
+    }
+
+    /// CTAP2 authenticatorGetInfo (0x04).
+    public static func getInfoRequest() -> Data { secondDeviceAuth(Data([0x04])) }
+
+    /// CTAP2 authenticatorGetAssertion (0x02) + canonical CBOR
+    /// {1: "google.com", 2: clientDataHash, 5: {"up": true, "uv": true}}.
+    public static func assertionRequest(clientDataHash: Data) -> Data {
+        precondition(clientDataHash.count == 32)
+        var c = Data([0x02, 0xA3])
+        c += Data([0x01, 0x6A]) + Data("google.com".utf8)
+        c += Data([0x02, 0x58, 0x20]) + clientDataHash
+        c += Data([0x05, 0xA2, 0x62]) + Data("up".utf8) + Data([0xF5, 0x62]) + Data("uv".utf8) + Data([0xF5])
+        return secondDeviceAuth(c)
+    }
+
+    /// Decode a {"quickStartPayload": base64(json)} envelope; nil if not that shape.
+    public static func quickStartPayload(_ body: Data) -> [String: Any]? {
+        guard let o = try? JSONSerialization.jsonObject(with: sanitized(body)) as? [String: Any],
+              let b64 = o["quickStartPayload"] as? String,
+              let raw = Data(base64Encoded: b64, options: .ignoreUnknownCharacters),
+              let inner = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else { return nil }
+        return inner
+    }
+
+    /// Android's Base64.DEFAULT puts raw line breaks inside JSON strings, which
+    /// strict JSON parsing rejects (Chromium parses leniently). Strip them.
+    public static func sanitized(_ body: Data) -> Data {
+        Data(body.filter { $0 != 0x0A && $0 != 0x0D })
+    }
+
     /// NotifyPhoneSetupComplete (bootstrapState=2). Tells the phone setup succeeded.
     public static func bootstrapComplete() -> Data {
         let obj: [String: Any] = ["bootstrapState": 2]
@@ -38,7 +80,7 @@ public enum QuickStartMessages {
     /// the ROOT (no wrapper key) even though its reader looks for a wrapper, so
     /// accept both shapes.
     public static func parseBootstrapConfigurations(_ body: Data) -> [String: Any]? {
-        guard let o = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return nil }
+        guard let o = try? JSONSerialization.jsonObject(with: sanitized(body)) as? [String: Any] else { return nil }
         if let wrapped = o["bootstrapConfigurations"] as? [String: Any] { return wrapped }
         if o["email"] != nil || o["instanceId"] != nil || o["instance_id"] != nil { return o }
         return o

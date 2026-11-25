@@ -37,7 +37,10 @@ public final class NearbyConnection {
     private func sendApp(_ body: Data, label: String) {
         guard let ch = channel else { return }
         let pid = payloadId; payloadId += 1
-        fc.sendFrame(ch.encode(NearbyFrames.payloadBytes(id: pid, body: body)))
+        // Standard Nearby BYTES payload: one data chunk, then an empty last chunk.
+        fc.sendFrame(ch.encode(NearbyFrames.payloadBytes(id: pid, body: body, lastChunk: false)))
+        fc.sendFrame(ch.encode(NearbyFrames.payloadBytes(id: pid, body: Data(), lastChunk: true,
+                                                          totalSize: body.count, offset: body.count)))
         log("→ \(label) (\(body.count)B) as payload \(pid)")
     }
 
@@ -78,19 +81,27 @@ public final class NearbyConnection {
             state = .gotClientFinished
 
         case .gotClientFinished:
-            // phone's ConnectionResponse (plaintext). Reply with ours (accept),
-            // then the channel is encrypted.
-            log("got phone ConnectionResponse (\(data.count)B); sending accept")
+            // phone's ConnectionResponse (plaintext, type 2). Over Bluetooth the
+            // phone also sends plaintext keep-alives (type 5) here — skip them.
+            let t = NearbyFrames.frameType(data)
+            guard t == 2 else {
+                log("plaintext frame type \(t.map(String.init) ?? "?") (\(data.count)B) before ConnectionResponse — ignored")
+                return
+            }
+            log("got phone ConnectionResponse (\(data.count)B): \(data.hex); sending accept")
             fc.sendFrame(NearbyFrames.connectionResponse(accept: true))
             state = .secure
             if let secret = quickStartSecret, let auth = authString {
-                // Quick Start app layer — Target drives: handshake → bootstrapOptions.
-                // bootstrapOptions makes the phone surface its account picker.
+                // Quick Start app layer (Chromium connection.cc): handshake now;
+                // bootstrapOptions only after the phone reports user verification.
                 do {
-                    let hs = try QuickStart.buildHandshakeMessage(authBytes: auth, secret: secret,
+                    // Chromium passes NC's human-readable token, not the raw bytes:
+                    // uppercase(websafe-base64(raw UKEY2 token)[:5]) (encryption_runner.cc).
+                    let token = String(auth.base64url.prefix(5)).uppercased()
+                    log("auth token for handshake: \(token)")
+                    let hs = try QuickStart.buildHandshakeMessage(authString: token, secret: secret,
                                                                   role: QuickStart.roleTarget)
                     sendApp(hs, label: "handshake")
-                    sendApp(QuickStartMessages.bootstrapOptions(), label: "bootstrapOptions")
                 } catch { log("handshake build failed: \(error)") }
             } else if let ch = channel {
                 fc.sendFrame(ch.encode(NearbyFrames.keepAlive(ack: false, seq: 1)))
@@ -98,27 +109,91 @@ public final class NearbyConnection {
             }
 
         case .secure:
-            // encrypted frames — decrypt with the channel. Dump the phone's
-            // app-layer messages (JSON in PayloadTransferFrame BYTES) so a live
-            // run captures exactly what the Quick Start source sends.
             guard let ch = channel else { return }
-            let plain = try ch.decode(data)
+            let plain: Data
+            do { plain = try ch.decode(data) } catch {
+                let t = NearbyFrames.frameType(data)
+                log("non-encrypted frame (\(data.count)B) type \(t.map(String.init) ?? "?") in secure state: \(data.prefix(48).hex) — ignored (\(error))")
+                return
+            }
             let t = NearbyFrames.frameType(plain)
             if t == NearbyFrames.framePayloadTransfer, let (id, body, last) = NearbyFrames.payloadBody(plain) {
-                let txt = String(data: body, encoding: .utf8) ?? "<non-utf8>"
-                log("🔓 app payload id=\(id) \(body.count)B last=\(last)")
-                log("    utf8: \(txt.prefix(500))")
-                log("    hex : \(Data(body.prefix(96)).hex)")
-                if let cfg = QuickStartMessages.parseBootstrapConfigurations(body) {
-                    let email = cfg["email"] as? String
-                    let iid = (cfg["instanceId"] ?? cfg["instance_id"]) as? String
-                    if email != nil || iid != nil {
-                        log("    🎯 bootstrapConfigurations — email=\(email ?? "?") instanceId=\(iid ?? "?")")
-                    }
-                }
+                pending[id, default: Data()] += body
+                guard last else { return }
+                let full = pending.removeValue(forKey: id) ?? Data()
+                if !full.isEmpty { handleApp(full) }
+            } else if t == 5 {
+                fc.sendFrame(ch.encode(NearbyFrames.keepAlive(ack: true, seq: 0)))
             } else {
-                log("🔓 decrypted frame (\(plain.count)B) type \(t.map(String.init) ?? "?")")
+                log("🔓 frame type \(t.map(String.init) ?? "?") (\(plain.count)B)")
             }
         }
+    }
+
+    // MARK: Quick Start target flow
+
+    private var pending: [Int64: Data] = [:]
+    private var sentBootstrapOptions = false
+    private enum Fido { case none, sentGetInfo, sentAssertion }
+    private var fido = Fido.none
+    private var clientDataJSON = ""
+
+    private func handleApp(_ body: Data) {
+        let txt = String(data: body, encoding: .utf8) ?? "<\(body.count)B non-utf8 \(body.prefix(48).hex)>"
+        log("⬅︎ raw \(body.count)B: \(txt.prefix(1200))")
+        // Chromium's reader checks bootstrapConfigurations before quickStartPayload;
+        // the phone's account reply can carry both keys.
+        if let o = try? JSONSerialization.jsonObject(with: QuickStartMessages.sanitized(body)) as? [String: Any],
+           o["bootstrapConfigurations"] != nil {
+            let cfg = QuickStartMessages.parseBootstrapConfigurations(body) ?? [:]
+            log("⬅︎ 🎯 bootstrapConfigurations \(cfg)")
+            if fido == .none {
+                fido = .sentGetInfo
+                sendApp(QuickStartMessages.getInfoRequest(), label: "FIDO GetInfo")
+            }
+            return
+        }
+        if let inner = QuickStartMessages.quickStartPayload(body) {
+            log("⬅︎ quickStartPayload \(inner)")
+            if inner["user_verification_result"] != nil, !sentBootstrapOptions {
+                sentBootstrapOptions = true
+                sendApp(QuickStartMessages.bootstrapOptions(), label: "bootstrapOptions (account request)")
+            }
+            return
+        }
+        guard let o = try? JSONSerialization.jsonObject(with: QuickStartMessages.sanitized(body)) as? [String: Any] else {
+            log("⬅︎ \(txt.prefix(200))")
+            return
+        }
+        if let sd = o["secondDeviceAuthPayload"] {
+            log("⬅︎ secondDeviceAuthPayload \(String(describing: sd).prefix(600))")
+            if let d = sd as? [String: Any], let fm = d["fidoMessage"] as? String,
+               let ctap = Data(base64Encoded: fm) {
+                log("    CTAP response \(ctap.count)B status=0x\(String(format: "%02x", ctap.first ?? 0xff)) \(ctap.prefix(160).hex)")
+            }
+            if fido == .sentGetInfo {
+                fido = .sentAssertion
+                var ch = Data(count: 32)
+                ch.withUnsafeMutableBytes { _ = SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
+                let challenge = ch.base64url.replacingOccurrences(of: "=", with: "")
+                clientDataJSON = QuickStartMessages.clientDataJSON(challengeB64url: challenge)
+                log("    clientData \(clientDataJSON)")
+                let hash = Data(SHA256.hash(data: Data(clientDataJSON.utf8)))
+                sendApp(QuickStartMessages.assertionRequest(clientDataHash: hash), label: "FIDO GetAssertion")
+            } else if fido == .sentAssertion {
+                log("    🎯 FIDO assertion received")
+            }
+            return
+        }
+        if o["bootstrapConfigurations"] != nil || o["email"] != nil || o["instanceId"] != nil {
+            let cfg = QuickStartMessages.parseBootstrapConfigurations(body) ?? [:]
+            log("⬅︎ 🎯 bootstrapConfigurations \(cfg)")
+            if fido == .none {
+                fido = .sentGetInfo
+                sendApp(QuickStartMessages.getInfoRequest(), label: "FIDO GetInfo")
+            }
+            return
+        }
+        log("⬅︎ \(txt.prefix(400))")
     }
 }
