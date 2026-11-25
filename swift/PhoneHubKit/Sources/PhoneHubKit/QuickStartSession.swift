@@ -72,7 +72,8 @@ public enum QuickStartMessages {
 
     /// NotifyPhoneSetupComplete (bootstrapState=2). Tells the phone setup succeeded.
     public static func bootstrapComplete() -> Data {
-        let obj: [String: Any] = ["bootstrapState": 2]
+        let landing = "intent:#Intent;action=com.google.android.gms.quickstart.LANDING_SCREEN;package=com.google.android.gms;end"
+        let obj: [String: Any] = ["bootstrapState": 2, "PostTransferAction": ["uri": landing]]
         return (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
     }
 

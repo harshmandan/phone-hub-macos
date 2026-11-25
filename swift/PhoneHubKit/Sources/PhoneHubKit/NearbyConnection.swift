@@ -182,6 +182,10 @@ public final class NearbyConnection {
                 sendApp(QuickStartMessages.assertionRequest(clientDataHash: hash), label: "FIDO GetAssertion")
             } else if fido == .sentAssertion {
                 log("    🎯 FIDO assertion received")
+                // Google sign-in needs a TPM attestation cert we can't make; the Mac
+                // already has the account via its master token. Tell the phone
+                // setup finished (Chromium NotifyPhoneSetupComplete).
+                sendApp(QuickStartMessages.bootstrapComplete(), label: "bootstrapState=2 (setup complete)")
             }
             return
         }
