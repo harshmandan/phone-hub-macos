@@ -6,3 +6,4 @@ __pycache__/
 secrets.txt
 tokens.txt
 device_keys.json
+last_sync_response.json

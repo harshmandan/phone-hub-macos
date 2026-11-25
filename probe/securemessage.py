@@ -138,7 +138,7 @@ def decrypt(secure_message: bytes, group_priv: ec.EllipticCurvePrivateKey) -> by
     session_pub = _parse_generic_public_key(header[4])
     master = _master_key(group_priv, session_pub)
     enc_key = _hkdf(master, b"ENC:2")
-    iv = header[7]
+    iv = header[5]
     dec = Cipher(algorithms.AES(enc_key), modes.CBC(iv)).decryptor()
     padded = dec.update(body) + dec.finalize()
     unpadder = PKCS7(128).unpadder()
