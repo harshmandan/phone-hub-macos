@@ -16,6 +16,9 @@ final class PhoneHubEngine: ObservableObject {
     @Published var notifications: [UINotification] = []
     @Published var photos: [UIPhoto] = []
     @Published var hotspot: HotspotStatus = .off
+    /// The current fine-grained step shown while connecting (finding phone, linking,
+    /// opening the channel…), from the subprocess logs. Empty when not connecting.
+    @Published private(set) var step = ""
     @Published private(set) var lastLog = ""
     /// App-level activity (connecting, connected, notifications received, …) for
     /// the Logs tab. Not the raw protocol data — just what happened, when.
@@ -33,7 +36,9 @@ final class PhoneHubEngine: ObservableObject {
     private var armRestarts = 0
     private var armed = false
     private var connectGen = 0           // invalidates stale arm-timeout checks
-    private let armTimeout: TimeInterval = 45
+    private let armTimeout: TimeInterval = 60
+    private var armTimeoutRetries = 0    // auto-retries after a slow arm handshake
+    private let armTimeoutMaxRetries = 1
     let btGate = BluetoothGate()
     private var wantConnected = false
     private var btCancellable: AnyCancellable?
@@ -75,19 +80,40 @@ final class PhoneHubEngine: ObservableObject {
         if btGate.isUnknown { btGate.start(); note("Waiting for Bluetooth permission…"); return }
         arm?.terminate(); nc?.terminate(); arm = nil; nc = nil; armStdin = nil; ncStdin = nil
         notifications = []; photos = []
-        armed = false; ncRetries = 0; armRestarts = 0; hotspot = .off
+        armed = false; ncRetries = 0; armRestarts = 0; armTimeoutRetries = 0; hotspot = .off
         status = .arming
+        step = "Finding your phone…"
         connectGen += 1
-        let gen = connectGen
         note("Connecting to \(config.phoneName)…")
         startArm()
-        // If the Bluetooth arm never authenticates, the phone is out of range /
-        // locked — say so instead of spinning on "Waking phone…" forever.
+        scheduleArmTimeout(gen: connectGen)
+    }
+
+    /// Watchdog: if the Bluetooth arm doesn't authenticate within armTimeout, the
+    /// handshake stalled (not necessarily range — GMS can throttle, the phone may
+    /// be busy). Auto-retry a fresh attempt once, then show a neutral, retryable
+    /// message instead of claiming the phone is out of range.
+    private func scheduleArmTimeout(gen: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + armTimeout) { [weak self] in
-            guard let self, self.connectGen == gen, !self.armed, self.status == .arming else { return }
-            self.note("Couldn't reach the phone over Bluetooth (out of range or locked).")
-            self.arm?.terminate(); self.arm = nil; self.armStdin = nil
-            self.status = .error("Phone out of range")
+            self?.armTimeoutFired(gen: gen)
+        }
+    }
+
+    private func armTimeoutFired(gen: Int) {
+        guard connectGen == gen, !armed, status == .arming else { return }
+        // Invalidate this arm so its termination handler won't also restart it.
+        connectGen += 1
+        arm?.terminate(); arm = nil; armStdin = nil
+        if armTimeoutRetries < armTimeoutMaxRetries {
+            armTimeoutRetries += 1
+            step = "Reconnecting…"
+            note("Taking longer than usual — retrying…")
+            startArm()
+            scheduleArmTimeout(gen: connectGen)
+        } else {
+            step = ""
+            note("Couldn't connect.")
+            status = .error("Couldn't connect. Try again.")
         }
     }
 
@@ -97,6 +123,7 @@ final class PhoneHubEngine: ObservableObject {
         nc?.terminate(); arm?.terminate()
         nc = nil; arm = nil; ncStdin = nil; armStdin = nil
         hotspot = .off
+        step = ""
         if status == .connected { note("Disconnected.") }
         status = .disconnected
     }
@@ -187,19 +214,26 @@ final class PhoneHubEngine: ObservableObject {
     }
 
     private func startArm() {
-        guard let (p, stdin) = launch(["bleweave", "600", config.identityPath, "json"],
+        // Long session so the link stays up; the supervisor reconnects on a real
+        // drop. Arm must outlive the NC session (it holds the phone's listener).
+        guard let (p, stdin) = launch(["bleweave", "7200", config.identityPath, "json"],
                                       env: ["PHONEHUB_ARM_ONLY": "1"],  // don't auto-enable the hotspot
                                       onLine: { [weak self] line in
             self?.onArmLine(line)
         }) else { return }
         arm = p; armStdin = stdin
-        p.terminationHandler = { [weak self] _ in Task { @MainActor in self?.onArmExit() } }
+        let gen = connectGen
+        p.terminationHandler = { [weak self] _ in Task { @MainActor in self?.onArmExit(gen: gen) } }
     }
 
     private func onArmLine(_ line: String) {
         lastLog = line
+        if line.contains("phone found") { step = "Linking over Bluetooth…" }
         if !armed, line.contains("secure channel established") {
             armed = true
+            armRestarts = 0        // a session succeeded — reset the drop budget
+            armTimeoutRetries = 0
+            step = "Opening a secure channel…"
             note("Phone awake over Bluetooth.")
             // Give the phone a few seconds to bring up its Nearby listener.
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.startNC() }
@@ -265,14 +299,18 @@ final class PhoneHubEngine: ObservableObject {
         }
     }
 
-    private func onArmExit() {
+    private func onArmExit(gen: Int) {
+        // A stale arm (replaced by a timeout-retry or a fresh connect) — ignore.
+        guard gen == connectGen else { return }
         guard status != .disconnected else { return }   // we asked for it
         arm = nil; armStdin = nil; armed = false
         guard armRestarts < 4 else {
-            status = .error("Bluetooth keeps dropping")
+            step = ""
+            status = .error("Couldn't connect. Try again.")
             return
         }
         armRestarts += 1
+        step = "Reconnecting…"
         note("Bluetooth link ended — reconnecting (\(armRestarts)/4)…")
         if status == .connected { status = .arming }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
@@ -284,7 +322,8 @@ final class PhoneHubEngine: ObservableObject {
     private func startNC() {
         guard status == .arming || status == .connecting, arm != nil else { return }
         status = .connecting
-        guard let (p, stdin) = launch(["phonehub", config.phoneBtMac, "120", config.identityPath, "json"],
+        step = "Connecting over Nearby…"
+        guard let (p, stdin) = launch(["phonehub", config.phoneBtMac, "3600", config.identityPath, "json"],
                                       onLine: { [weak self] line in self?.onNcLine(line) }) else { return }
         nc = p; ncStdin = stdin
         p.terminationHandler = { [weak self] _ in Task { @MainActor in self?.onNcExit() } }
@@ -298,12 +337,24 @@ final class PhoneHubEngine: ObservableObject {
         // retries all drop; a short settle connects first try).
         if status == .connecting, ncRetries < 4 {
             ncRetries += 1
+            step = "Reconnecting…"
             let delay = Double(ncRetries) * 6   // 6s, 12s, 18s, 24s
             lastLog = "retrying Nearby connection (\(ncRetries)/4) in \(Int(delay))s…"
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.startNC() }
+        } else if status == .connected, arm != nil {
+            // The NC session ended (its timer elapsed, or a transient drop) but the
+            // phone is still armed — re-establish quietly instead of erroring. Keeps
+            // accumulated notifications (the engine merges, never clears them).
+            ncRetries = 0
+            status = .connecting
+            step = "Reconnecting…"
+            note("Re-establishing channel…")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.startNC() }
         } else if status == .connected {
+            step = ""
             status = .error("Connection dropped")
         } else {
+            step = ""
             status = .error("Couldn't connect")
         }
     }
@@ -313,6 +364,7 @@ final class PhoneHubEngine: ObservableObject {
         if line.contains("secure_channel established over Nearby") {
             if status != .connected { note("Connected to \(config.phoneName).") }
             status = .connected
+            step = ""
         }
         guard line.hasPrefix("EVENT ") else { return }
         let json = String(line.dropFirst("EVENT ".count))
@@ -323,6 +375,7 @@ final class PhoneHubEngine: ObservableObject {
         case "status":
             if status != .connected { note("Connected to \(config.phoneName).") }
             status = .connected
+            step = ""
             phone.battery = obj["battery"] as? Int
             phone.charging = (obj["charging"] as? Bool) ?? false
             phone.signalBars = obj["signalBars"] as? Int
@@ -331,6 +384,9 @@ final class PhoneHubEngine: ObservableObject {
             phone.cameraRollGranted = (obj["cameraRoll"] as? Bool) ?? false
             phone.phoneName = config.phoneName
             phone.lastUpdated = Date()
+            if let c = obj["noteCount"] as? Int, (obj["isUpdate"] as? Bool) == false {
+                note("Phone sent \(c) notification\(c == 1 ? "" : "s") in the snapshot.")
+            }
         case "notification":
             guard let idStr = obj["id"] as? String, let id = Int64(idStr) else { return }
             let n = UINotification(id: id, app: (obj["app"] as? String) ?? "",

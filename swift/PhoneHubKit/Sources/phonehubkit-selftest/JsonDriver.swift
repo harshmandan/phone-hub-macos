@@ -20,7 +20,7 @@ enum JsonDriver {
             emit(["type": "status", "battery": snap.battery as Any, "charging": snap.charging,
                   "signalBars": snap.signalBars as Any, "carrier": snap.carrier,
                   "android": snap.androidVersion as Any, "cameraRoll": snap.cameraRollGranted,
-                  "isUpdate": snap.isUpdate])
+                  "isUpdate": snap.isUpdate, "noteCount": snap.notifications.count])
             for n in snap.notifications {
                 emit(["type": "notification", "id": "\(n.id)", "app": n.app,
                       "title": n.title, "text": n.text, "canReply": n.canReply])

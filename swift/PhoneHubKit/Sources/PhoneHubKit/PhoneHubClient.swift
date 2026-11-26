@@ -111,6 +111,7 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
     }
     private var sentPhotoFetch = false
+    private var scheduledNotifResync = false   // warm-listener re-snapshot scheduled?
     private var photoByKey: [String: PhoneHub.Photo] = [:]
     private var pendingFiles: [Int64: PhoneHub.Photo] = [:]   // Nearby payload id → photo
 
@@ -434,6 +435,11 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
                             sentPhotoFetch = true
                             sendPhoneHub(PhoneHub.fetchCameraRollItems(max: 12), label: "FetchCameraRollItems")
                         }
+                        // GMS binds its notification listener fresh on connect and
+                        // snapshots it ~instantly, so the first snapshot is usually
+                        // empty (listener not yet populated). Re-send CrosState a few
+                        // times to re-snapshot once the listener has warmed up.
+                        scheduleNotificationResync()
                     }
                 }
             } else if feature == Tether.feature {
@@ -448,6 +454,21 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
     private func requestFeatures() {
         guard let ctx else { return }
         sendSecure(ctx.encode(PhoneHub.crosState(cameraRoll: fetchPhotos)), feature: PhoneHub.feature, label: "CrosState (phone_hub)")
+    }
+
+    /// Re-send CrosState a few times after the first snapshot. Each one makes GMS
+    /// re-run getCurrentNotifications; by the later ones its notification listener
+    /// is populated, so the phone sends a snapshot with the real backlog.
+    private func scheduleNotificationResync() {
+        guard !scheduledNotifResync else { return }
+        scheduledNotifResync = true
+        for delay in [2.0, 5.0, 12.0] {
+            Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+                guard let self, self.ctx != nil else { return }
+                self.log("↻ notification re-snapshot (CrosState)")
+                self.requestFeatures()
+            }
+        }
     }
 
     /// Write each thumbnail to `photoDir` and log the item.

@@ -84,6 +84,16 @@ do {
                 }
             }
         }
+        // The menu-bar app terminates us (SIGTERM) to reconnect. Close the weave
+        // cleanly first so the phone frees the session and accepts the next connect
+        // right away (otherwise it holds a stale weave and rejects/ignores it).
+        signal(SIGTERM, SIG_IGN)
+        let termSrc = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        termSrc.setEventHandler {
+            radio.shutdown()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }
+        }
+        termSrc.resume()
         radio.run(seconds: secs)
     } else if args.count >= 3 && args[1] == "phonehub" {
         // phonehub <phone-mac> [seconds=90] [identity.json] [action]

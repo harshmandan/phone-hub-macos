@@ -91,6 +91,20 @@ public final class BleRadio: NSObject {
         print("bleweave done")
     }
 
+    /// Cleanly tear down before the process dies: tell the phone to close the
+    /// weave so it frees the session immediately. Without this, an abrupt kill
+    /// leaves a stale weave on the phone, which then rejects (connectionClose) or
+    /// ignores the next connect's handshake — the cause of the reconnect churn.
+    /// Safe to call from a SIGTERM handler dispatched on the main queue.
+    public func shutdown() {
+        if let p = peripheral, let tx {
+            let type: CBCharacteristicWriteType =
+                tx.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
+            p.writeValue(generator.connectionClose(), for: tx, type: type)
+        }
+        if let p = peripheral { central?.cancelPeripheralConnection(p) }
+    }
+
     public func start() {
         setvbuf(stdout, nil, _IONBF, 0)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
@@ -288,7 +302,14 @@ extension BleRadio: CBPeripheralDelegate {
                     log("uWeave connected — sending D2D [Initiator Hello]")
                     sendMessage(handshake.initiatorHello(), feature: WireMessage.authFeature, label: "[Initiator Hello]")
                 } else if cmd == Weave.connectionClose {
-                    log("uWeave connectionClose from phone")
+                    // The phone closed the weave channel (it rejects a new request
+                    // while a stale one lingers, and also closes on a real drop).
+                    // Don't hang waiting for a handshake that won't come — disconnect
+                    // and exit so the supervisor reconnects immediately (the retry is
+                    // almost always accepted). Hanging here cost a 60s arm-timeout.
+                    log("uWeave connectionClose from phone — disconnecting for fast retry")
+                    central.cancelPeripheralConnection(peripheral)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }
                 }
             case .incomplete:
                 break  // more packets of a data message to come
