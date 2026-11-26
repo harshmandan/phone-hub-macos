@@ -5,7 +5,6 @@ import SwiftUI
 struct PanelView: View {
     @EnvironmentObject var engine: PhoneHubEngine
     @Environment(\.openSettings) private var openSettings
-    @State private var pulse = 0.0   // slow flash for the status dot while connecting
 
     private var headerSubtitle: String {
         if engine.btGate.isDenied { return "Needs Bluetooth permission" }
@@ -17,7 +16,7 @@ struct PanelView: View {
             }
             return "Connected"
         case .error(let m): return m
-        default: return engine.status.label   // Waking phone… / Connecting… / Not connected
+        default: return engine.step.isEmpty ? engine.status.label : engine.step
         }
     }
 
@@ -26,7 +25,6 @@ struct PanelView: View {
             header
             if engine.status == .connected {
                 quickActions
-                hotspotBar
                 Divider().opacity(0.4)
                 notificationsSection
                 if !engine.photos.isEmpty { photosSection }
@@ -38,7 +36,6 @@ struct PanelView: View {
         .padding(14)
         .frame(width: 360)
         .focusEffectDisabled()
-        .onAppear { pulse = 1 }
     }
 
     // MARK: header
@@ -52,11 +49,13 @@ struct PanelView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {
                     Text(engine.config.phoneName).font(.headline)
-                    Circle().fill(statusColor).frame(width: 8, height: 8)
-                        .opacity(engine.status.isBusy ? (0.3 + 0.7 * pulse) : 1)
-                        .animation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: pulse)
+                    PulseDot(color: statusColor, active: engine.status.isBusy)
                 }
-                Text(headerSubtitle).font(.caption).foregroundStyle(.secondary)
+                if engine.status == .connected {
+                    SyncLabel(lastUpdated: engine.phone.lastUpdated) { engine.refreshPhotos() }
+                } else {
+                    Text(headerSubtitle).font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer()
             if engine.status == .connected {
@@ -121,7 +120,12 @@ struct PanelView: View {
                 .controlSize(.large).buttonStyle(.borderedProminent).tint(Palette.accent)
             } else if engine.btGate.isUnknown {
                 Text("Allow Bluetooth to connect").font(.subheadline).foregroundStyle(.secondary)
-                Text("Click Allow on the macOS prompt.").font(.caption).foregroundStyle(.tertiary)
+                Text("Click Allow on the macOS prompt. If you dismissed it, open Settings.")
+                    .font(.caption).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+                Button { openBluetoothSettings() } label: {
+                    Label("Open Bluetooth Settings", systemImage: "gearshape").frame(maxWidth: .infinity)
+                }
+                .controlSize(.large).buttonStyle(.bordered)
             } else if engine.config.phoneBtMac.isEmpty {
                 Text("Set up your phone in Settings").font(.subheadline).foregroundStyle(.secondary)
                 Button { openSettings() } label: {
@@ -129,8 +133,9 @@ struct PanelView: View {
                 }
                 .controlSize(.large).buttonStyle(.borderedProminent).tint(Palette.accent)
             } else if engine.status.isBusy {
-                // Connecting: no button, just the status + a spinner.
-                Text(engine.status.label).font(.subheadline).foregroundStyle(.secondary)
+                // Connecting: no button, just the live step + a spinner.
+                Text(engine.step.isEmpty ? engine.status.label : engine.step)
+                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 ProgressView().controlSize(.small)
             } else {
                 if case .error(let m) = engine.status {
@@ -153,32 +158,41 @@ struct PanelView: View {
         HStack(spacing: 10) {
             QuickAction(icon: "bell.and.waves.left.and.right", title: "Ring") { engine.ring() }
             QuickAction(icon: "photo.on.rectangle", title: "Photos") { engine.refreshPhotos() }
-            QuickAction(icon: "arrow.clockwise", title: "Refresh") { engine.refreshPhotos() }
+            hotspotAction
         }
     }
 
-    // MARK: hotspot (Instant Tethering)
+    // MARK: hotspot (Instant Tethering) — third quick action
 
-    @ViewBuilder private var hotspotBar: some View {
-        if engine.hotspot != .off {
-            Button {
-                switch engine.hotspot {
-                case .available, .failed: engine.enableHotspot()
-                default: break
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: hotspotIcon).foregroundStyle(hotspotTint)
-                    Text(engine.hotspot.label).font(.caption).lineLimit(1)
-                    Spacer()
-                    if isHotspotBusy { ProgressView().controlSize(.small) }
-                }
-                .padding(.horizontal, 12).padding(.vertical, 9)
-                .frame(maxWidth: .infinity)
-                .glassCard(cornerRadius: 12)
+    private var hotspotAction: some View {
+        Button {
+            switch engine.hotspot {
+            case .off, .available, .failed: engine.enableHotspot()
+            default: break
             }
-            .buttonStyle(.plain)
-            .disabled(isHotspotBusy)
+        } label: {
+            VStack(spacing: 5) {
+                if isHotspotBusy {
+                    ProgressView().controlSize(.small).frame(height: 20)
+                } else {
+                    Image(systemName: hotspotIcon).font(.title3).foregroundStyle(hotspotTint)
+                }
+                Text(hotspotTitle).font(.caption2).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 10)
+            .glassCard(cornerRadius: 12)
+        }
+        .buttonStyle(.plain)
+        .disabled(isHotspotBusy)
+    }
+
+    private var hotspotTitle: String {
+        switch engine.hotspot {
+        case .off, .available: return "Hotspot"
+        case .turningOn: return "Turning on"
+        case .joining: return "Joining"
+        case .joined: return "On hotspot"
+        case .failed: return "Retry"
         }
     }
 
@@ -271,6 +285,58 @@ private struct MenuRow: View {
         }
         .buttonStyle(.plain).font(.callout)
         .onHover { hover = $0 }
+    }
+}
+
+/// Status dot. While busy it pulses opacity, driven purely by a TimelineView
+/// clock (no implicit .animation), so it never animates layout — the dot and the
+/// rows around it stay put instead of sliding.
+private struct PulseDot: View {
+    let color: Color
+    let active: Bool
+    var body: some View {
+        Group {
+            if active {
+                TimelineView(.animation) { ctx in
+                    let t = ctx.date.timeIntervalSinceReferenceDate
+                    let o = 0.4 + 0.6 * (0.5 + 0.5 * sin(t * 2.6))   // smooth 0.4–1.0
+                    Circle().fill(color).opacity(o)
+                }
+            } else {
+                Circle().fill(color)
+            }
+        }
+        .frame(width: 8, height: 8)
+    }
+}
+
+/// The header "Last synced …" label. Shows a small refresh glyph; the time ticks
+/// live (5s buckets). Hovering turns it into a "Refresh now" text link.
+private struct SyncLabel: View {
+    let lastUpdated: Date?
+    let refresh: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: refresh) {
+            TimelineView(.periodic(from: .now, by: 5)) { ctx in
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.clockwise").font(.caption2)
+                    if hover {
+                        Text("Refresh now")
+                    } else if let d = lastUpdated {
+                        Text("Last synced \(relativeTime(since: d, now: ctx.date))")
+                    } else {
+                        Text("Syncing…")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(hover ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(.secondary))
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help("Refresh now")
     }
 }
 

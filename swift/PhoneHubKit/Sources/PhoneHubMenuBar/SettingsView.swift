@@ -208,26 +208,41 @@ private struct PhoneRow: View {
 /// not the message contents, just what happened and when.
 private struct LogsView: View {
     let log: [String]
+    @State private var copied = false
+
+    private var joined: String { log.joined(separator: "\n") }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Activity").font(.title3.weight(.semibold))
+            HStack {
+                Text("Activity").font(.title3.weight(.semibold))
+                Spacer()
+                Button {
+                    let pb = NSPasteboard.general
+                    pb.clearContents(); pb.setString(joined, forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                } label: {
+                    Label(copied ? "Copied" : "Copy all", systemImage: copied ? "checkmark" : "doc.on.doc")
+                }
+                .controlSize(.small).disabled(log.isEmpty)
+            }
             Text("What the app did — connecting, notifications arriving, and so on. Not message contents.")
                 .font(.caption).foregroundStyle(.secondary)
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        if log.isEmpty {
-                            Text("Nothing yet.").font(.caption).foregroundStyle(.secondary)
-                        }
-                        ForEach(Array(log.enumerated()), id: \.offset) { i, line in
-                            Text(line).font(.caption.monospaced()).foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading).id(i)
-                        }
-                    }
-                    .textSelection(.enabled).padding(8)
+                    // One text block so selection behaves like a normal document
+                    // (drag to select a range; ⌘A selects everything).
+                    Text(log.isEmpty ? "Nothing yet." : joined)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                    Color.clear.frame(height: 1).id("bottom")
                 }
                 .background(.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
-                .onChange(of: log.count) { _, c in if c > 0 { withAnimation { proxy.scrollTo(c - 1) } } }
+                .onChange(of: log.count) { _, _ in withAnimation { proxy.scrollTo("bottom") } }
             }
         }
         .padding(20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

@@ -1,5 +1,22 @@
 import Foundation
 
+/// Coarse "time ago" for the last-synced label: "just now", "15 seconds ago",
+/// "1 minute ago", "2 hours ago". Buckets by 5s under a minute so it doesn't
+/// flicker every second.
+func relativeTime(since date: Date, now: Date = Date()) -> String {
+    let s = max(0, Int(now.timeIntervalSince(date)))
+    switch s {
+    case ..<5:   return "just now"
+    case ..<60:  let v = (s / 5) * 5; return "\(v) second\(v == 1 ? "" : "s") ago"
+    case ..<3600:
+        let m = s / 60; return "\(m) minute\(m == 1 ? "" : "s") ago"
+    case ..<86400:
+        let h = s / 3600; return "\(h) hour\(h == 1 ? "" : "s") ago"
+    default:
+        let d = s / 86400; return "\(d) day\(d == 1 ? "" : "s") ago"
+    }
+}
+
 /// UI-facing phone state, decoupled from PhoneHubKit's wire types so the views
 /// never touch protocol internals.
 struct PhoneState: Equatable {
@@ -43,8 +60,8 @@ enum ConnectionStatus: Equatable {
     var label: String {
         switch self {
         case .disconnected: return "Disconnected"
-        case .arming: return "Waking phone…"
-        case .connecting: return "Connecting…"
+        case .arming: return "Connecting…"
+        case .connecting: return "Opening channel…"
         case .connected: return "Connected"
         case .error(let m): return "Error: \(m)"
         }
