@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject var engine: PhoneHubEngine
@@ -8,10 +9,11 @@ struct SettingsView: View {
         TabView {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
             OnboardingView().tabItem { Label("Set up", systemImage: "antenna.radiowaves.left.and.right") }
-            ConfigSettings().tabItem { Label("Config", systemImage: "doc.badge.gearshape") }
         }
         .padding(20)
         .onChange(of: engine.config) { _, c in ConfigStore.save(c) }
+        .onAppear { WindowActivation.enter() }
+        .onDisappear { WindowActivation.leave() }
     }
 }
 
@@ -20,82 +22,92 @@ struct SettingsView: View {
 private struct GeneralSettings: View {
     @EnvironmentObject var engine: PhoneHubEngine
     @Environment(\.openWindow) private var openWindow
-    @State private var importMsg = ""
-    @State private var importOK = true
+    @State private var msg = ""
+    @State private var msgOK = true
+
+    private var isSetUp: Bool { !engine.config.phoneBtMac.isEmpty && !engine.config.identityPath.isEmpty }
 
     var body: some View {
         Form {
-            Section("Connection") {
-                Text("Reuse the connection you already set up with the CLI — no need to enroll again. This copies the identity + keys into the app.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Button { importConnection() } label: { Label("Import from CLI setup…", systemImage: "square.and.arrow.down.on.square") }
-                    if FileManager.default.fileExists(atPath: ConfigStore.probeIdentityPath) {
-                        Button("Use repo probe") { runImport(URL(fileURLWithPath: ConfigStore.probeIdentityPath)) }
-                    }
-                }
-                if !importMsg.isEmpty {
-                    Text(importMsg).font(.caption).foregroundStyle(importOK ? Palette.good : .red)
-                }
-            }
-            Section("Phone") {
-                TextField("Name", text: $engine.config.phoneName)
-                TextField("Bluetooth MAC", text: $engine.config.phoneBtMac)
-                    .font(.body.monospaced())
-                HStack {
-                    TextField("Identity file", text: $engine.config.identityPath)
-                        .font(.caption.monospaced())
-                    Button("Choose…") { pickIdentity() }
-                }
-            }
-            Section("Behavior") {
-                Toggle("Connect automatically on launch", isOn: $engine.config.autoConnect)
-                Toggle("Show notifications", isOn: $engine.config.showNotifications)
-            }
             Section("Account") {
-                if engine.config.account.isEmpty && !ConfigStore.hasMasterToken {
+                if engine.config.account.isEmpty {
                     Button { openWindow(id: "signin") } label: {
                         Label("Sign in with Google…", systemImage: "person.badge.key")
                     }
                     Text("Opens a Google sign-in window. We read the sign-in token Google returns — never your password.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 } else {
-                    HStack {
-                        Image(systemName: "checkmark.seal.fill").foregroundStyle(Palette.good)
-                        Text(engine.config.account.isEmpty ? "Signed in" : engine.config.account)
-                        Spacer()
-                        Button("Sign in again") { openWindow(id: "signin") }
+                    LabeledContent("Connected account") {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.seal.fill").foregroundStyle(Palette.good)
+                            Text(engine.config.account)
+                        }
+                    }
+                    Button("Sign in with a different account") { openWindow(id: "signin") }
+                        .font(.caption)
+                }
+            }
+
+            Section("Phone") {
+                if isSetUp {
+                    LabeledContent("Name", value: engine.config.phoneName)
+                    LabeledContent("Bluetooth MAC") { Text(engine.config.phoneBtMac).font(.body.monospaced()) }
+                } else {
+                    Text("No phone set up yet. Import a setup below, or use the Set up tab.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Setup") {
+                Text("Move a working setup to another Mac as one file.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button { importBundle() } label: { Label("Import setup…", systemImage: "square.and.arrow.down") }
+                    Button { exportBundle() } label: { Label("Export setup…", systemImage: "square.and.arrow.up") }
+                        .disabled(!isSetUp)
+                    if FileManager.default.fileExists(atPath: ConfigStore.probeIdentityPath) {
+                        Button("Use repo probe") { runImportFiles(URL(fileURLWithPath: ConfigStore.probeIdentityPath)) }
                     }
                 }
+                if !msg.isEmpty { Text(msg).font(.caption).foregroundStyle(msgOK ? Palette.good : .red) }
+            }
+
+            Section("Behavior") {
+                Toggle("Connect automatically on launch", isOn: $engine.config.autoConnect)
+                Text("To stop sharing photos or notifications, turn them off in your phone's Chromebook settings.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
     }
 
-    private func pickIdentity() {
+    private func importBundle() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.canChooseFiles = true
-        if panel.runModal() == .OK, let url = panel.url { engine.config.identityPath = url.path }
-    }
-
-    private func importConnection() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.message = "Pick the CLI's phone_identity.json (device_keys.json must sit next to it)."
-        if panel.runModal() == .OK, let url = panel.url { runImport(url) }
-    }
-
-    private func runImport(_ url: URL) {
-        do {
-            engine.config = try ConfigStore.importSetup(from: url)
-            importOK = true
-            importMsg = "Imported \(engine.config.phoneName) (\(engine.config.phoneBtMac)). Ready to connect."
-        } catch {
-            importOK = false
-            importMsg = error.localizedDescription
+        panel.allowedContentTypes = [.zip]
+        panel.message = "Pick a PhoneHub setup .zip (exported by the app or the CLI)."
+        if panel.runModal() == .OK, let url = panel.url {
+            do { engine.config = try ConfigStore.importBundle(from: url); ok("Imported \(engine.config.phoneName). Ready to connect.") }
+            catch { fail(error) }
         }
     }
+
+    private func exportBundle() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "phonehub-setup.zip"
+        panel.allowedContentTypes = [.zip]
+        if panel.runModal() == .OK, let url = panel.url {
+            do { try ConfigStore.exportBundle(to: url); ok("Exported to \(url.lastPathComponent).") }
+            catch { fail(error) }
+        }
+    }
+
+    private func runImportFiles(_ url: URL) {
+        do { engine.config = try ConfigStore.importSetup(from: url); ok("Imported \(engine.config.phoneName). Ready to connect.") }
+        catch { fail(error) }
+    }
+
+    private func ok(_ s: String) { msgOK = true; msg = s }
+    private func fail(_ e: Error) { msgOK = false; msg = e.localizedDescription }
 }
 
 // MARK: Onboarding (ESP32 flashing)
@@ -139,47 +151,5 @@ private struct OnboardingView: View {
             .glassCard()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-}
-
-// MARK: Config export/import
-
-private struct ConfigSettings: View {
-    @EnvironmentObject var engine: PhoneHubEngine
-    @State private var message = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Configuration").font(.title3.weight(.semibold))
-            Text("Export your setup to move it to another Mac, or import one you saved.")
-                .font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button { export() } label: { Label("Export…", systemImage: "square.and.arrow.up") }
-                Button { importConfig() } label: { Label("Import…", systemImage: "square.and.arrow.down") }
-            }
-            if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary) }
-            Spacer()
-            Text("Stored at \(ConfigStore.url.path)").font(.caption2).foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private func export() {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "phonehub-config.json"
-        panel.allowedContentTypes = [.json]
-        if panel.runModal() == .OK, let url = panel.url {
-            do { try ConfigStore.export(engine.config, to: url); message = "Exported to \(url.lastPathComponent)" }
-            catch { message = "Export failed: \(error.localizedDescription)" }
-        }
-    }
-
-    private func importConfig() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        if panel.runModal() == .OK, let url = panel.url {
-            do { engine.config = try ConfigStore.load(from: url); ConfigStore.save(engine.config); message = "Imported." }
-            catch { message = "Import failed: \(error.localizedDescription)" }
-        }
     }
 }

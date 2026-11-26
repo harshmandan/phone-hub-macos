@@ -29,11 +29,13 @@ struct SignInView: View {
         }
         .frame(width: 460, height: 600)
         .onAppear {
+            WindowActivation.enter()   // focus so the Google login can take keyboard input
             controller.onSignedIn = { email in
                 engine.config.account = email
                 ConfigStore.save(engine.config)
             }
         }
+        .onDisappear { WindowActivation.leave() }
     }
 
     @ViewBuilder private var statusBar: some View {

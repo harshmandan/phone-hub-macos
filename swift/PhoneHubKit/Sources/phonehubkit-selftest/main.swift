@@ -36,6 +36,18 @@ do {
         NearbyAdvertiser(name: Host.current().localizedName ?? "Mac").run(seconds: secs)
     } else if args.count >= 2 && args[1] == "nettest" {
         print(NearbyTransport.loopbackTest() ? "loopback frame transport OK" : "loopback FAILED")
+    } else if args.count >= 3 && args[1] == "export" {
+        // export <out.zip> [email] [identity.json] — bundle identity+keys+meta for
+        // the app to import in one file.
+        let out = args[2]
+        let email = args.count >= 4 ? args[3] : ""
+        let idPath = args.count >= 5 ? args[4] : "../../probe/phone_identity.json"
+        let idj = (try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: idPath)))) as? [String: Any] ?? [:]
+        let meta = ConnectionBundle.Meta(account: email,
+                                         name: (idj["name"] as? String) ?? "phone",
+                                         btMac: (idj["btMac"] as? String) ?? "")
+        try ConnectionBundle.export(identityPath: idPath, meta: meta, to: URL(fileURLWithPath: out))
+        print("exported setup bundle → \(out)")
     } else if args.count >= 2 && args[1] == "bleweave" {
         // bleweave [seconds=120] [identity.json] — BLE central: scan the phone's
         // FE50 EID, connect to the b3b7e28e weave GATT, run uWeave.

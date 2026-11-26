@@ -1,4 +1,5 @@
 import Foundation
+import PhoneHubKit
 
 /// Persists AppConfig to Application Support, and round-trips it for export/import.
 enum ConfigStore {
@@ -28,12 +29,34 @@ enum ConfigStore {
             c.identityPath = probe
             c.phoneBtMac = "00:00:00:00:00:00"
             c.phoneName = "Pixel 9"
+            c.account = "you@example.com"
         }
         return c
     }
 
-    static func export(_ c: AppConfig, to dest: URL) throws { try JSONEncoder().encodePretty(c).write(to: dest) }
-    static func load(from src: URL) throws -> AppConfig { try JSONDecoder().decode(AppConfig.self, from: Data(contentsOf: src)) }
+    /// Export the whole setup (identity + keys + account/name/mac) as one .zip.
+    static func exportBundle(to dest: URL) throws {
+        let c = load()
+        let idPath = c.identityPath.isEmpty
+            ? supportDir.appendingPathComponent("phone_identity.json").path : c.identityPath
+        try ConnectionBundle.export(identityPath: idPath,
+            meta: .init(account: c.account, name: c.phoneName, btMac: c.phoneBtMac), to: dest)
+    }
+
+    /// Import a .zip bundle: copy identity + keys into the support dir and apply
+    /// the account / name / MAC it carries.
+    static func importBundle(from src: URL) throws -> AppConfig {
+        let b = try ConnectionBundle.unpack(src)
+        defer { try? FileManager.default.removeItem(at: b.root) }
+        var c = try importSetup(from: b.identity)   // copies identity + sibling keys
+        if let m = b.meta {
+            if !m.account.isEmpty { c.account = m.account }
+            if !m.name.isEmpty { c.phoneName = m.name }
+            if !m.btMac.isEmpty { c.phoneBtMac = m.btMac }
+            save(c)
+        }
+        return c
+    }
 
     /// The app's support directory (where we copy an imported setup).
     static var supportDir: URL { url.deletingLastPathComponent() }
