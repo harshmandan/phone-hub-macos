@@ -26,7 +26,7 @@ struct PhoneHubApp: App {
         MenuBarExtra {
             PanelView().environmentObject(engine)
         } label: {
-            Image(systemName: menuIcon)
+            MenuBarLabel(engine: engine)
         }
         .menuBarExtraStyle(.window)
 
@@ -40,12 +40,40 @@ struct PhoneHubApp: App {
         }
         .windowResizability(.contentSize)
     }
+}
 
-    private var menuIcon: String {
+/// The menu-bar item: the phone's live carrier, signal, and battery when
+/// connected; otherwise a status icon.
+private struct MenuBarLabel: View {
+    @ObservedObject var engine: PhoneHubEngine
+
+    var body: some View {
+        if engine.status == .connected {
+            HStack(spacing: 3) {
+                if let bars = engine.phone.signalBars {
+                    Image(systemName: "cellularbars", variableValue: max(0.15, Double(bars) / 4.0))
+                }
+                if !engine.phone.carrier.isEmpty { Text(engine.phone.carrier) }
+                if let b = engine.phone.battery {
+                    Image(systemName: engine.phone.charging ? "battery.100.bolt" : batteryIcon(b))
+                    Text("\(b)%")
+                }
+            }
+        } else {
+            Image(systemName: statusIcon)
+        }
+    }
+
+    private var statusIcon: String {
         switch engine.status {
         case .connected: return "iphone.gen3"
         case .arming, .connecting: return "iphone.gen3.radiowaves.left.and.right"
         default: return "iphone.slash"
         }
+    }
+
+    private func batteryIcon(_ b: Int) -> String {
+        switch b { case ..<13: return "battery.0"; case ..<38: return "battery.25"
+        case ..<63: return "battery.50"; case ..<88: return "battery.75"; default: return "battery.100" }
     }
 }

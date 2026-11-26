@@ -22,6 +22,7 @@ struct PanelView: View {
         }
         .padding(14)
         .frame(width: 360)
+        .focusEffectDisabled()
     }
 
     // MARK: header
@@ -33,7 +34,7 @@ struct PanelView: View {
                 Image(systemName: "iphone.gen3").font(.title2).foregroundStyle(Palette.accent)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(engine.phone.phoneName).font(.headline)
+                Text(engine.config.phoneName).font(.headline)
                 HStack(spacing: 6) {
                     Circle().fill(statusColor).frame(width: 7, height: 7)
                     Text(engine.status.label).font(.caption).foregroundStyle(.secondary)
@@ -74,24 +75,29 @@ struct PanelView: View {
         VStack(spacing: 10) {
             Image(systemName: "iphone.gen3.radiowaves.left.and.right")
                 .font(.system(size: 34)).foregroundStyle(.secondary)
-            Text(engine.config.phoneBtMac.isEmpty ? "Set up your phone in Settings" : "Not connected")
-                .font(.subheadline).foregroundStyle(.secondary)
-            if case .error(let m) = engine.status {
-                Text(m).font(.caption).foregroundStyle(.red).multilineTextAlignment(.center)
+            if engine.config.phoneBtMac.isEmpty {
+                Text("Set up your phone in Settings").font(.subheadline).foregroundStyle(.secondary)
+                Button { openSettings() } label: {
+                    Label("Open Settings", systemImage: "gearshape").frame(maxWidth: .infinity)
+                }
+                .controlSize(.large).buttonStyle(.borderedProminent).tint(Palette.accent)
+            } else if engine.status.isBusy {
+                // Connecting: no button, just the status + a spinner.
+                Text(engine.status.label).font(.subheadline).foregroundStyle(.secondary)
+                ProgressView().controlSize(.small)
+            } else {
+                if case .error(let m) = engine.status {
+                    Text(m).font(.caption).foregroundStyle(.red).multilineTextAlignment(.center)
+                } else {
+                    Text("Not connected").font(.subheadline).foregroundStyle(.secondary)
+                }
+                Button { engine.connect() } label: {
+                    Label("Connect", systemImage: "antenna.radiowaves.left.and.right").frame(maxWidth: .infinity)
+                }
+                .controlSize(.large).buttonStyle(.borderedProminent).tint(Palette.accent)
             }
-            Button {
-                engine.config.phoneBtMac.isEmpty ? openSettings() : engine.connect()
-            } label: {
-                Label(engine.config.phoneBtMac.isEmpty ? "Open Settings" : "Connect",
-                      systemImage: "antenna.radiowaves.left.and.right")
-                    .frame(maxWidth: .infinity)
-            }
-            .controlSize(.large).buttonStyle(.borderedProminent).tint(Palette.accent)
-            .disabled(engine.status.isBusy)
-            if engine.status.isBusy { ProgressView().controlSize(.small) }
         }
-        .frame(maxWidth: .infinity).padding(.vertical, 18)
-        .glassCard()
+        .frame(maxWidth: .infinity).padding(.vertical, 16)
     }
 
     // MARK: quick actions
@@ -182,17 +188,40 @@ struct PanelView: View {
     // MARK: footer
 
     private var footer: some View {
-        HStack {
-            Button { openSettings() } label: { Image(systemName: "gearshape") }
-                .buttonStyle(.plain).foregroundStyle(.secondary)
-            Spacer()
-            if engine.status == .connected || engine.status.isBusy {
-                Button("Disconnect") { engine.disconnect() }.buttonStyle(.plain).foregroundStyle(.red)
+        VStack(spacing: 0) {
+            Divider().opacity(0.3).padding(.bottom, 2)
+            if engine.status == .connected {
+                MenuRow(title: "Disconnect", icon: "bolt.slash", tint: .red) { engine.disconnect() }
             }
-            Button("Quit") { NSApplication.shared.terminate(nil) }
-                .buttonStyle(.plain).foregroundStyle(.secondary)
+            MenuRow(title: "Settings…", icon: "gearshape") { openSettings() }
+            MenuRow(title: "Quit PhoneHub", icon: "power") { NSApplication.shared.terminate(nil) }
         }
-        .font(.callout)
+    }
+}
+
+/// A full-width row that behaves like a native menu item (hover highlight).
+private struct MenuRow: View {
+    let title: String
+    let icon: String
+    var tint: Color = .primary
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon).frame(width: 16)
+                Text(title)
+                Spacer()
+            }
+            .foregroundStyle(tint)
+            .padding(.vertical, 5).padding(.horizontal, 8)
+            .frame(maxWidth: .infinity)
+            .background(hover ? Color.secondary.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).font(.callout)
+        .onHover { hover = $0 }
     }
 }
 

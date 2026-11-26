@@ -59,6 +59,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .focusEffectDisabled()
         .frame(minWidth: 460, minHeight: 420)
         .onAppear { WindowActivation.enter(); system.refresh() }
         .onDisappear { WindowActivation.leave() }
