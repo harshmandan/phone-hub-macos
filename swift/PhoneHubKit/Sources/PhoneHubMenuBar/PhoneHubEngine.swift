@@ -30,6 +30,7 @@ final class PhoneHubEngine: ObservableObject {
     private var armBuf = Data()
     private var ncBuf = Data()
     private var ncRetries = 0
+    private var armRestarts = 0
     private var armed = false
     private var connectGen = 0           // invalidates stale arm-timeout checks
     private let armTimeout: TimeInterval = 45
@@ -57,7 +58,7 @@ final class PhoneHubEngine: ObservableObject {
         guard !status.isBusy, status != .connected, !config.phoneBtMac.isEmpty, !config.identityPath.isEmpty else { return }
         arm?.terminate(); nc?.terminate(); arm = nil; nc = nil; armStdin = nil; ncStdin = nil
         notifications = []; photos = []
-        armed = false; ncRetries = 0; hotspot = .off
+        armed = false; ncRetries = 0; armRestarts = 0; hotspot = .off
         status = .arming
         connectGen += 1
         let gen = connectGen
@@ -247,7 +248,19 @@ final class PhoneHubEngine: ObservableObject {
     }
 
     private func onArmExit() {
-        if status != .disconnected { status = .error("BLE arm process exited") }
+        guard status != .disconnected else { return }   // we asked for it
+        arm = nil; armStdin = nil; armed = false
+        guard armRestarts < 4 else {
+            status = .error("Bluetooth keeps dropping. Unlock the phone and keep it within a metre of the Mac.")
+            return
+        }
+        armRestarts += 1
+        note("Bluetooth link ended — reconnecting (\(armRestarts)/4)…")
+        if status == .connected { status = .arming }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, self.status != .disconnected else { return }
+            self.startArm()
+        }
     }
 
     private func startNC() {

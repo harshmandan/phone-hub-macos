@@ -178,6 +178,14 @@ private struct PhoneRow: View {
             }
             Spacer()
             Menu {
+                if isActive {
+                    if engine.status == .connected {
+                        Button { engine.disconnect() } label: { Label("Disconnect", systemImage: "bolt.slash") }
+                    } else if !engine.status.isBusy {
+                        Button { engine.connect() } label: { Label("Connect", systemImage: "antenna.radiowaves.left.and.right") }
+                    }
+                    Divider()
+                }
                 Button { onExport(phone) } label: { Label("Export setup…", systemImage: "square.and.arrow.up") }
                 Button(role: .destructive) { onRemove(phone) } label: { Label("Remove", systemImage: "trash") }
             } label: { Image(systemName: "ellipsis.circle") }

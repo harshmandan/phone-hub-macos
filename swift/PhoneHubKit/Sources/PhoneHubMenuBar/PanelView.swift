@@ -82,10 +82,14 @@ struct PanelView: View {
 
     /// Open Settings and close the menu-bar popover so it doesn't linger behind it.
     private func openSettingsDismissingPanel() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
         openSettings()
         DispatchQueue.main.async {
-            for w in NSApp.windows where String(describing: type(of: w)).contains("MenuBarExtra") {
-                w.close()
+            for w in NSApp.windows {
+                let cls = String(describing: type(of: w))
+                if cls.contains("MenuBarExtra") { w.close() }                 // dismiss the popover
+                else if w.isVisible && !w.title.isEmpty { w.makeKeyAndOrderFront(nil) }  // front Settings if already open
             }
         }
     }
@@ -216,9 +220,6 @@ struct PanelView: View {
     private var footer: some View {
         VStack(spacing: 1) {
             Divider().padding(.horizontal, -14).padding(.bottom, 3)
-            if engine.status == .connected {
-                MenuRow(title: "Disconnect", destructive: true) { engine.disconnect() }
-            }
             MenuRow(title: "Settings…", shortcut: "⌘,") { openSettingsDismissingPanel() }
             MenuRow(title: "Quit PhoneHub", shortcut: "⌘Q") { NSApplication.shared.terminate(nil) }
         }
@@ -245,10 +246,10 @@ private struct MenuRow: View {
                 }
             }
             .foregroundStyle(hover ? .white : (destructive ? .red : .primary))
-            .padding(.vertical, 4).padding(.horizontal, 12)
+            .padding(.vertical, 3).padding(.horizontal, 10)
             .frame(maxWidth: .infinity)
             .background(hover ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear),
-                        in: RoundedRectangle(cornerRadius: 5))
+                        in: RoundedRectangle(cornerRadius: 4))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain).font(.callout)
