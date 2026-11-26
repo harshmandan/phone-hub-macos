@@ -17,6 +17,9 @@ final class PhoneHubEngine: ObservableObject {
     @Published var photos: [UIPhoto] = []
     @Published var hotspot: HotspotStatus = .off
     @Published private(set) var lastLog = ""
+    /// App-level activity (connecting, connected, notifications received, …) for
+    /// the Logs tab. Not the raw protocol data — just what happened, when.
+    @Published private(set) var appLog: [String] = []
 
     var config: AppConfig
 
@@ -28,6 +31,15 @@ final class PhoneHubEngine: ObservableObject {
     private var ncBuf = Data()
     private var ncRetries = 0
     private var armed = false
+    private var connectGen = 0           // invalidates stale arm-timeout checks
+    private let armTimeout: TimeInterval = 45
+
+    /// Append a timestamped line to the app log (newest last, capped).
+    func note(_ s: String) {
+        let t = Date().formatted(date: .omitted, time: .standard)
+        appLog.append("\(t)  \(s)")
+        if appLog.count > 400 { appLog.removeFirst(appLog.count - 400) }
+    }
 
     init(config: AppConfig) {
         self.config = config
@@ -45,13 +57,26 @@ final class PhoneHubEngine: ObservableObject {
         notifications = []; photos = []
         armed = false; ncRetries = 0; hotspot = .off
         status = .arming
+        connectGen += 1
+        let gen = connectGen
+        note("Connecting to \(config.phoneName)…")
         startArm()
+        // If the Bluetooth arm never authenticates, the phone is out of range /
+        // locked — say so instead of spinning on "Waking phone…" forever.
+        DispatchQueue.main.asyncAfter(deadline: .now() + armTimeout) { [weak self] in
+            guard let self, self.connectGen == gen, !self.armed, self.status == .arming else { return }
+            self.note("Couldn't reach the phone over Bluetooth (out of range or locked).")
+            self.arm?.terminate(); self.arm = nil; self.armStdin = nil
+            self.status = .error("Can't reach your phone. Unlock it and keep it within a metre of the Mac.")
+        }
     }
 
     func disconnect() {
+        connectGen += 1
         nc?.terminate(); arm?.terminate()
         nc = nil; arm = nil; ncStdin = nil; armStdin = nil
         hotspot = .off
+        if status == .connected { note("Disconnected.") }
         status = .disconnected
     }
 
@@ -154,6 +179,7 @@ final class PhoneHubEngine: ObservableObject {
         lastLog = line
         if !armed, line.contains("secure channel established") {
             armed = true
+            note("Phone awake over Bluetooth.")
             // Give the phone a few seconds to bring up its Nearby listener.
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.startNC() }
         }
@@ -251,7 +277,10 @@ final class PhoneHubEngine: ObservableObject {
 
     private func onNcLine(_ line: String) {
         lastLog = line
-        if line.contains("secure_channel established over Nearby") { status = .connected }
+        if line.contains("secure_channel established over Nearby") {
+            if status != .connected { note("Connected to \(config.phoneName).") }
+            status = .connected
+        }
         guard line.hasPrefix("EVENT ") else { return }
         let json = String(line.dropFirst("EVENT ".count))
         guard let d = json.data(using: .utf8),
@@ -259,6 +288,7 @@ final class PhoneHubEngine: ObservableObject {
               let type = obj["type"] as? String else { return }
         switch type {
         case "status":
+            if status != .connected { note("Connected to \(config.phoneName).") }
             status = .connected
             phone.battery = obj["battery"] as? Int
             phone.charging = (obj["charging"] as? Bool) ?? false
@@ -275,7 +305,7 @@ final class PhoneHubEngine: ObservableObject {
                                    text: (obj["text"] as? String) ?? "",
                                    canReply: (obj["canReply"] as? Bool) ?? false)
             if let i = notifications.firstIndex(where: { $0.id == id }) { notifications[i] = n }
-            else { notifications.insert(n, at: 0) }
+            else { notifications.insert(n, at: 0); note("Notification from \(n.app.isEmpty ? "a phone app" : n.app).") }
         case "removed":
             if let idStr = obj["id"] as? String, let id = Int64(idStr) { notifications.removeAll { $0.id == id } }
         case "photo":

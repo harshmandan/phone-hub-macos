@@ -5,6 +5,19 @@ import SwiftUI
 struct PanelView: View {
     @EnvironmentObject var engine: PhoneHubEngine
     @Environment(\.openSettings) private var openSettings
+    @State private var pulse = 0.0   // slow flash for the status dot while connecting
+
+    private var headerSubtitle: String {
+        switch engine.status {
+        case .connected:
+            if let d = engine.phone.lastUpdated {
+                return "Last synced \(d.formatted(date: .omitted, time: .shortened))"
+            }
+            return "Connected"
+        case .error(let m): return m
+        default: return engine.status.label   // Waking phone… / Connecting… / Not connected
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -23,6 +36,9 @@ struct PanelView: View {
         .padding(14)
         .frame(width: 360)
         .focusEffectDisabled()
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) { pulse = 1 }
+        }
     }
 
     // MARK: header
@@ -34,11 +50,12 @@ struct PanelView: View {
                 Image(systemName: "iphone.gen3").font(.title2).foregroundStyle(Palette.accent)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(engine.config.phoneName).font(.headline)
-                HStack(spacing: 6) {
-                    Circle().fill(statusColor).frame(width: 7, height: 7)
-                    Text(engine.status.label).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 7) {
+                    Text(engine.config.phoneName).font(.headline)
+                    Circle().fill(statusColor).frame(width: 8, height: 8)
+                        .opacity(engine.status.isBusy ? (0.3 + 0.7 * pulse) : 1)
                 }
+                Text(headerSubtitle).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             if engine.status == .connected {
@@ -61,6 +78,16 @@ struct PanelView: View {
         case .arming, .connecting: return Palette.warn
         case .error: return .red
         case .disconnected: return .secondary
+        }
+    }
+
+    /// Open Settings and close the menu-bar popover so it doesn't linger behind it.
+    private func openSettingsDismissingPanel() {
+        openSettings()
+        DispatchQueue.main.async {
+            for w in NSApp.windows where String(describing: type(of: w)).contains("MenuBarExtra") {
+                w.close()
+            }
         }
     }
 
@@ -188,36 +215,41 @@ struct PanelView: View {
     // MARK: footer
 
     private var footer: some View {
-        VStack(spacing: 0) {
-            Divider().opacity(0.3).padding(.bottom, 2)
+        VStack(spacing: 1) {
+            Divider().padding(.horizontal, -14).padding(.bottom, 3)
             if engine.status == .connected {
-                MenuRow(title: "Disconnect", icon: "bolt.slash", tint: .red) { engine.disconnect() }
+                MenuRow(title: "Disconnect", destructive: true) { engine.disconnect() }
             }
-            MenuRow(title: "Settings…", icon: "gearshape") { openSettings() }
-            MenuRow(title: "Quit PhoneHub", icon: "power") { NSApplication.shared.terminate(nil) }
+            MenuRow(title: "Settings…", shortcut: "⌘,") { openSettingsDismissingPanel() }
+            MenuRow(title: "Quit PhoneHub", shortcut: "⌘Q") { NSApplication.shared.terminate(nil) }
         }
+        .padding(.horizontal, -8)
     }
 }
 
-/// A full-width row that behaves like a native menu item (hover highlight).
+/// A full-width row styled like a native menu item: accent-fill highlight on
+/// hover, optional keyboard-shortcut hint on the right.
 private struct MenuRow: View {
     let title: String
-    let icon: String
-    var tint: Color = .primary
+    var shortcut: String? = nil
+    var destructive = false
     let action: () -> Void
     @State private var hover = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon).frame(width: 16)
+            HStack {
                 Text(title)
                 Spacer()
+                if let s = shortcut {
+                    Text(s).foregroundStyle(hover ? .white.opacity(0.85) : .secondary)
+                }
             }
-            .foregroundStyle(tint)
-            .padding(.vertical, 5).padding(.horizontal, 8)
+            .foregroundStyle(hover ? .white : (destructive ? .red : .primary))
+            .padding(.vertical, 4).padding(.horizontal, 12)
             .frame(maxWidth: .infinity)
-            .background(hover ? Color.secondary.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .background(hover ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.clear),
+                        in: RoundedRectangle(cornerRadius: 5))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain).font(.callout)

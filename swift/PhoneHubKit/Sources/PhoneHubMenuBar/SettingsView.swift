@@ -13,6 +13,24 @@ struct SettingsView: View {
     @State private var msgOK = true
 
     var body: some View {
+        TabView {
+            generalTab.tabItem { Label("General", systemImage: "gearshape") }
+            logsTab.tabItem { Label("Logs", systemImage: "list.bullet.rectangle") }
+        }
+        .frame(minWidth: 480, minHeight: 440)
+        .focusEffectDisabled()
+        .onAppear { WindowActivation.enter(); system.refresh() }
+        .onDisappear { WindowActivation.leave() }
+        .alert("Multiple phones — coming soon", isPresented: $comingSoon) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("PhoneHub pairs with one phone for now. Managing several at once is on the way.")
+        }
+    }
+
+    private var logsTab: some View { LogsView(log: engine.appLog) }
+
+    private var generalTab: some View {
         Form {
             Section("Phones") {
                 if engine.config.phones.isEmpty {
@@ -59,15 +77,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .focusEffectDisabled()
-        .frame(minWidth: 460, minHeight: 420)
-        .onAppear { WindowActivation.enter(); system.refresh() }
-        .onDisappear { WindowActivation.leave() }
-        .alert("Multiple phones — coming soon", isPresented: $comingSoon) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("PhoneHub pairs with one phone for now. Managing several at once is on the way.")
-        }
     }
 
     // MARK: actions
@@ -147,10 +156,23 @@ private struct PhoneRow: View {
                     }
                 }
                 if !phone.account.isEmpty {
-                    Label(phone.account, systemImage: "checkmark.seal.fill")
+                    Label(phone.account, systemImage: "envelope.fill")
                         .font(.caption).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
                 }
-                if !phone.btMac.isEmpty {
+                if isActive, engine.status == .connected {
+                    HStack(spacing: 10) {
+                        if let b = engine.phone.battery {
+                            Label("\(b)%", systemImage: engine.phone.charging ? "battery.100.bolt" : "battery.100")
+                        }
+                        Label(engine.phone.carrier.isEmpty ? "\(engine.phone.signalBars ?? 0)/4" : engine.phone.carrier,
+                              systemImage: "cellularbars")
+                    }
+                    .font(.caption2).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
+                    if let d = engine.phone.lastUpdated {
+                        Text("Last synced \(d.formatted(date: .omitted, time: .shortened))")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                } else if !phone.btMac.isEmpty {
                     Text(phone.btMac).font(.caption2.monospaced()).foregroundStyle(.tertiary)
                 }
             }
@@ -171,5 +193,35 @@ private struct PhoneRow: View {
         case .error: return .red
         case .disconnected: return .secondary
         }
+    }
+}
+
+/// The Logs tab: app-level activity (connecting, notifications received, …) —
+/// not the message contents, just what happened and when.
+private struct LogsView: View {
+    let log: [String]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Activity").font(.title3.weight(.semibold))
+            Text("What the app did — connecting, notifications arriving, and so on. Not message contents.")
+                .font(.caption).foregroundStyle(.secondary)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        if log.isEmpty {
+                            Text("Nothing yet.").font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(Array(log.enumerated()), id: \.offset) { i, line in
+                            Text(line).font(.caption.monospaced()).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading).id(i)
+                        }
+                    }
+                    .textSelection(.enabled).padding(8)
+                }
+                .background(.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+                .onChange(of: log.count) { _, c in if c > 0 { withAnimation { proxy.scrollTo(c - 1) } } }
+            }
+        }
+        .padding(20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
