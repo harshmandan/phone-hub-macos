@@ -53,7 +53,9 @@ final class PhoneHubEngine: ObservableObject {
     // MARK: lifecycle
 
     func connect() {
-        guard status == .disconnected, !config.phoneBtMac.isEmpty, !config.identityPath.isEmpty else { return }
+        // Allow (re)connecting from disconnected OR error — not while busy/connected.
+        guard !status.isBusy, status != .connected, !config.phoneBtMac.isEmpty, !config.identityPath.isEmpty else { return }
+        arm?.terminate(); nc?.terminate(); arm = nil; nc = nil; armStdin = nil; ncStdin = nil
         notifications = []; photos = []
         armed = false; ncRetries = 0; hotspot = .off
         status = .arming
