@@ -55,9 +55,7 @@ do {
         if seeds.isEmpty { print("no phone beacon seeds at \(idPath)"); exit(1) }
         let radio = BleRadio(remoteSeeds: seeds)
         radio.onMessage = { print("  [ble] 🔓 channel message \($0.count)B: \($0.prefix(80).hex)") }
-        radio.start()
-        RunLoop.main.run(until: Date().addingTimeInterval(secs))
-        print("bleweave done")
+        radio.run(seconds: secs)
     } else if args.count >= 3 && args[1] == "phonehub" {
         // phonehub <phone-mac> [rfcomm-channel=13] [seconds=60]
         let channel = args.count >= 4 ? (Int(args[3]) ?? 13) : 13

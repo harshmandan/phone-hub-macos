@@ -20,8 +20,11 @@ public final class BleRadio: NSObject {
     // ble_weave_client_connection current values).
     static let advertServiceUUID = CBUUID(string: "0000FE50-0000-1000-8000-00805F9B34FB")
     static let gattServiceUUID = CBUUID(string: "b3b7e28e-a000-3e17-bd86-6e97b9e28c11")
-    static let txCharacteristicUUID = CBUUID(string: "977c6674-1239-4e72-993b-502369b8bb5a")
-    static let rxCharacteristicUUID = CBUUID(string: "f4b904a2-a030-43b3-98a8-221c536c03cb")
+    // This GMS build exposes the pre-migration weave characteristics (confirmed
+    // live by enumerating the b3b7e28e service): TX = …0101 [write],
+    // RX = …0102 [indicate].
+    static let txCharacteristicUUID = CBUUID(string: "00000100-0004-1000-8000-001A11000101")
+    static let rxCharacteristicUUID = CBUUID(string: "00000100-0004-1000-8000-001A11000102")
 
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
@@ -41,6 +44,14 @@ public final class BleRadio: NSObject {
         super.init()
     }
 
+    /// Start scanning and block on the run loop for `seconds` (synchronous, so it
+    /// is callable from the async `main` without the run(until:) async warning).
+    public func run(seconds: Double) {
+        start()
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+        print("bleweave done")
+    }
+
     public func start() {
         setvbuf(stdout, nil, _IONBF, 0)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
@@ -53,7 +64,16 @@ public final class BleRadio: NSObject {
 
     private func send(_ packet: Data) {
         guard let p = peripheral, let tx else { return }
-        p.writeValue(packet, for: tx, type: .withoutResponse)
+        // Match the characteristic: this phone's TX is [write] (with response),
+        // not writeWithoutResponse — a mismatched type is silently dropped.
+        let type: CBCharacteristicWriteType =
+            tx.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
+        log("→ write \(packet.count)B [\(type == .withResponse ? "withResp" : "noResp")]: \(packet.prefix(32).hex)")
+        p.writeValue(packet, for: tx, type: type)
+    }
+
+    public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        if let error { log("write error: \(error.localizedDescription)") }
     }
 }
 
@@ -110,13 +130,22 @@ extension BleRadio: CBPeripheralDelegate {
         let found = (peripheral.services ?? []).map { $0.uuid.uuidString }
         log("services: \(found.isEmpty ? "none" : found.joined(separator: ", "))")
         for service in peripheral.services ?? [] where service.uuid == Self.gattServiceUUID {
-            peripheral.discoverCharacteristics([Self.txCharacteristicUUID, Self.rxCharacteristicUUID], for: service)
+            // Discover ALL characteristics — the exact TX/RX UUIDs vary by GMS
+            // version, so enumerate and log what this phone actually exposes.
+            peripheral.discoverCharacteristics(nil, for: service)
         }
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        let chars = (service.characteristics ?? []).map { $0.uuid.uuidString }
-        log("characteristics of \(service.uuid): \(chars.joined(separator: ", "))")
+        for c in service.characteristics ?? [] {
+            var props: [String] = []
+            if c.properties.contains(.write) { props.append("write") }
+            if c.properties.contains(.writeWithoutResponse) { props.append("writeNoResp") }
+            if c.properties.contains(.notify) { props.append("notify") }
+            if c.properties.contains(.indicate) { props.append("indicate") }
+            if c.properties.contains(.read) { props.append("read") }
+            log("  char \(c.uuid.uuidString)  [\(props.joined(separator: ","))]")
+        }
         for c in service.characteristics ?? [] {
             if c.uuid == Self.txCharacteristicUUID { tx = c }
             if c.uuid == Self.rxCharacteristicUUID { peripheral.setNotifyValue(true, for: c) }
