@@ -46,7 +46,7 @@ echo "[phonehub.sh] opening Phone Hub over Nearby Connections …"
 for try in 1 2 3; do
   "$BIN" phonehub "$MAC" 30 "$ID" "$ACTION" | tee /tmp/phonehub-run.log
   if grep -q "PHONE HUB over Nearby" /tmp/phonehub-run.log; then exit 0; fi
-  echo "[phonehub.sh] no snapshot yet (try $try/3) — retrying …"
-  sleep 2
+  echo "[phonehub.sh] no snapshot yet (try $try/3) — settling before retry …"
+  sleep 8   # reconnecting too fast makes GMS Nearby throttle us
 done
 echo "[phonehub.sh] gave up after 3 tries (phone's NC listener may not be armed)."

@@ -11,6 +11,7 @@ struct PanelView: View {
             header
             if engine.status == .connected {
                 quickActions
+                hotspotBar
                 Divider().opacity(0.4)
                 notificationsSection
                 if !engine.photos.isEmpty { photosSection }
@@ -100,6 +101,53 @@ struct PanelView: View {
             QuickAction(icon: "bell.and.waves.left.and.right", title: "Ring") { engine.ring() }
             QuickAction(icon: "photo.on.rectangle", title: "Photos") { engine.refreshPhotos() }
             QuickAction(icon: "arrow.clockwise", title: "Refresh") { engine.refreshPhotos() }
+        }
+    }
+
+    // MARK: hotspot (Instant Tethering)
+
+    @ViewBuilder private var hotspotBar: some View {
+        if engine.hotspot != .off {
+            Button {
+                switch engine.hotspot {
+                case .available, .failed: engine.enableHotspot()
+                default: break
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: hotspotIcon).foregroundStyle(hotspotTint)
+                    Text(engine.hotspot.label).font(.caption).lineLimit(1)
+                    Spacer()
+                    if isHotspotBusy { ProgressView().controlSize(.small) }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 9)
+                .frame(maxWidth: .infinity)
+                .glassCard(cornerRadius: 12)
+            }
+            .buttonStyle(.plain)
+            .disabled(isHotspotBusy)
+        }
+    }
+
+    private var isHotspotBusy: Bool {
+        if case .turningOn = engine.hotspot { return true }
+        if case .joining = engine.hotspot { return true }
+        return false
+    }
+
+    private var hotspotIcon: String {
+        switch engine.hotspot {
+        case .joined: return "wifi"
+        case .failed: return "wifi.exclamationmark"
+        default: return "personalhotspot"
+        }
+    }
+
+    private var hotspotTint: Color {
+        switch engine.hotspot {
+        case .joined: return Palette.good
+        case .failed: return .red
+        default: return Palette.accent
         }
     }
 

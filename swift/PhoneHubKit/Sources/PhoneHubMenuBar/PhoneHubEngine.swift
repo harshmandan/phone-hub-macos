@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+import AppKit
+import CoreWLAN
 
 /// Drives the live Phone Hub connection by running the proven CLI as two
 /// subprocesses — `bleweave` to arm the phone's Nearby listener, then `phonehub …
@@ -13,6 +15,7 @@ final class PhoneHubEngine: ObservableObject {
     @Published var phone = PhoneState()
     @Published var notifications: [UINotification] = []
     @Published var photos: [UIPhoto] = []
+    @Published var hotspot: HotspotStatus = .off
     @Published private(set) var lastLog = ""
 
     var config: AppConfig
@@ -20,6 +23,7 @@ final class PhoneHubEngine: ObservableObject {
     private var arm: Process?
     private var nc: Process?
     private var ncStdin: FileHandle?
+    private var armStdin: FileHandle?
     private var armBuf = Data()
     private var ncBuf = Data()
     private var ncRetries = 0
@@ -37,14 +41,15 @@ final class PhoneHubEngine: ObservableObject {
     func connect() {
         guard status == .disconnected, !config.phoneBtMac.isEmpty, !config.identityPath.isEmpty else { return }
         notifications = []; photos = []
-        armed = false; ncRetries = 0
+        armed = false; ncRetries = 0; hotspot = .off
         status = .arming
         startArm()
     }
 
     func disconnect() {
         nc?.terminate(); arm?.terminate()
-        nc = nil; arm = nil; ncStdin = nil
+        nc = nil; arm = nil; ncStdin = nil; armStdin = nil
+        hotspot = .off
         status = .disconnected
     }
 
@@ -54,6 +59,31 @@ final class PhoneHubEngine: ObservableObject {
     func reply(to id: Int64, text: String) { sendCommand("reply \(id) \(text)") }
     func dismiss(_ id: Int64) { sendCommand("dismiss \(id)"); notifications.removeAll { $0.id == id } }
     func refreshPhotos() { sendCommand("photos") }
+
+    // MARK: photo actions
+
+    /// Pull the full-resolution file for one item. The `downloaded` event sets its
+    /// localPath when it arrives.
+    func downloadPhoto(_ photo: UIPhoto) {
+        guard let i = photos.firstIndex(where: { $0.key == photo.key }), !photos[i].downloading else { return }
+        photos[i].downloading = true
+        sendCommand("download \(photo.key)")
+    }
+
+    /// Open the full file if downloaded, else the thumbnail, in the default viewer.
+    func viewPhoto(_ photo: UIPhoto) {
+        guard let path = photo.localPath ?? photo.thumbnailPath else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
+    /// Copy the image (full file if downloaded, else thumbnail) to the clipboard.
+    func copyPhoto(_ photo: UIPhoto) {
+        guard let path = photo.localPath ?? photo.thumbnailPath,
+              let img = NSImage(contentsOfFile: path) else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.writeObjects([img])
+    }
 
     private func sendCommand(_ cmd: String) {
         guard status == .connected, let h = ncStdin else { return }
@@ -101,12 +131,12 @@ final class PhoneHubEngine: ObservableObject {
     }
 
     private func startArm() {
-        guard let (p, _) = launch(["bleweave", "600", config.identityPath],
-                                  env: ["PHONEHUB_ARM_ONLY": "1"],  // don't turn on the hotspot
-                                  onLine: { [weak self] line in
+        guard let (p, stdin) = launch(["bleweave", "600", config.identityPath, "json"],
+                                      env: ["PHONEHUB_ARM_ONLY": "1"],  // don't auto-enable the hotspot
+                                      onLine: { [weak self] line in
             self?.onArmLine(line)
         }) else { return }
-        arm = p
+        arm = p; armStdin = stdin
         p.terminationHandler = { [weak self] _ in Task { @MainActor in self?.onArmExit() } }
     }
 
@@ -116,6 +146,60 @@ final class PhoneHubEngine: ObservableObject {
             armed = true
             // Give the phone a few seconds to bring up its Nearby listener.
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.startNC() }
+        }
+        guard line.hasPrefix("EVENT ") else { return }
+        let json = String(line.dropFirst("EVENT ".count))
+        guard let d = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let type = obj["type"] as? String else { return }
+        switch type {
+        case "tether":
+            let state = (obj["state"] as? String) ?? ""
+            switch state {
+            case "available":
+                if case .joined = hotspot {} else if case .joining = hotspot {} else { hotspot = .available }
+            case "ready":
+                if let ssid = obj["ssid"] as? String, let pw = obj["password"] as? String {
+                    hotspot = .joining(ssid)
+                    joinWiFi(ssid: ssid, password: pw)
+                }
+            default: break
+            }
+        default: break
+        }
+    }
+
+    // MARK: hotspot (Instant Tethering)
+
+    /// Ask the phone to turn its hotspot on; the `tether ready` event then carries
+    /// the credentials and we auto-join.
+    func enableHotspot() {
+        guard let h = armStdin else { return }
+        hotspot = .turningOn
+        try? h.write(contentsOf: Data("tether\n".utf8))
+    }
+
+    /// Join the phone's hotspot Wi-Fi with CoreWLAN (scan then associate).
+    private func joinWiFi(ssid: String, password: String) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result: Result<String, Error>
+            do {
+                guard let iface = CWWiFiClient.shared().interface() else {
+                    throw NSError(domain: "PhoneHub", code: 1, userInfo: [NSLocalizedDescriptionKey: "no Wi-Fi interface"])
+                }
+                let networks = try iface.scanForNetworks(withName: ssid)
+                guard let net = networks.first(where: { $0.ssid == ssid }) ?? networks.first else {
+                    throw NSError(domain: "PhoneHub", code: 2, userInfo: [NSLocalizedDescriptionKey: "network \(ssid) not found"])
+                }
+                try iface.associate(to: net, password: password)
+                result = .success(ssid)
+            } catch { result = .failure(error) }
+            DispatchQueue.main.async { [weak self] in
+                switch result {
+                case .success(let s): self?.hotspot = .joined(s)
+                case .failure(let e): self?.hotspot = .failed(e.localizedDescription)
+                }
+            }
         }
     }
 
@@ -135,11 +219,14 @@ final class PhoneHubEngine: ObservableObject {
     private func onNcExit() {
         ncStdin = nil; nc = nil
         guard status != .disconnected else { return }
-        // The RFCOMM accept is timing-sensitive; retry a couple of times.
-        if status == .connecting, ncRetries < 3 {
+        // A pre-Phone-Hub drop exits the process; retry with a GROWING backoff —
+        // reconnecting too fast makes GMS Nearby throttle us (observed: rapid
+        // retries all drop; a short settle connects first try).
+        if status == .connecting, ncRetries < 4 {
             ncRetries += 1
-            lastLog = "retrying Nearby connection (\(ncRetries)/3)…"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.startNC() }
+            let delay = Double(ncRetries) * 6   // 6s, 12s, 18s, 24s
+            lastLog = "retrying Nearby connection (\(ncRetries)/4) in \(Int(delay))s…"
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.startNC() }
         } else if status == .connected {
             status = .error("connection dropped")
         } else {
@@ -183,6 +270,12 @@ final class PhoneHubEngine: ObservableObject {
                             sizeKB: Int((obj["sizeKB"] as? String) ?? "0") ?? 0,
                             thumbnailPath: (obj["thumb"] as? String).flatMap { $0.isEmpty ? nil : $0 })
             if !photos.contains(where: { $0.key == p.key }) { photos.append(p) }
+        case "downloaded":
+            guard let key = obj["key"] as? String, let path = obj["path"] as? String else { return }
+            if let i = photos.firstIndex(where: { $0.key == key }) {
+                photos[i].localPath = path
+                photos[i].downloading = false
+            }
         default: break
         }
     }

@@ -28,6 +28,8 @@ struct UIPhoto: Identifiable, Equatable {
     var mime: String
     var sizeKB: Int
     var thumbnailPath: String?        // decoded thumbnail saved on disk
+    var localPath: String?            // full-resolution file, once downloaded
+    var downloading = false
     var isVideo: Bool { mime.hasPrefix("video/") }
 }
 
@@ -49,6 +51,27 @@ enum ConnectionStatus: Equatable {
     }
 
     var isBusy: Bool { self == .arming || self == .connecting }
+}
+
+/// Instant Tethering (phone hotspot) state for the UI.
+enum HotspotStatus: Equatable {
+    case off                      // phone hasn't offered tethering
+    case available                // phone offers a hotspot; user can turn it on
+    case turningOn                // asked the phone, waiting for credentials
+    case joining(String)          // joining the Wi-Fi network (SSID)
+    case joined(String)           // Mac is on the phone's hotspot (SSID)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .off: return "Hotspot"
+        case .available: return "Turn on hotspot"
+        case .turningOn: return "Turning on…"
+        case .joining(let s): return "Joining \(s)…"
+        case .joined(let s): return "On hotspot \(s)"
+        case .failed(let m): return "Hotspot failed: \(m)"
+        }
+    }
 }
 
 /// Persisted app configuration (also what config export/import round-trips).

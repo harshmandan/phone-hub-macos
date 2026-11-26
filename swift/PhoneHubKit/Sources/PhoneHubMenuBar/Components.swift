@@ -65,8 +65,10 @@ struct NotificationRow: View {
     }
 }
 
-/// A camera-roll thumbnail (loads the decoded thumbnail file the CLI wrote).
+/// A camera-roll thumbnail (loads the decoded thumbnail the CLI wrote). Tap to
+/// view; right-click to download the full file, copy, or reveal it.
 struct PhotoThumb: View {
+    @EnvironmentObject var engine: PhoneHubEngine
     let photo: UIPhoto
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -80,10 +82,30 @@ struct PhotoThumb: View {
             }
             .frame(width: 72, height: 72)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            if photo.isVideo {
-                Image(systemName: "play.circle.fill").font(.caption).foregroundStyle(.white).padding(3)
-            }
+            badge
         }
         .help(photo.fileName)
+        .onTapGesture { engine.viewPhoto(photo) }
+        .contextMenu {
+            Button { engine.viewPhoto(photo) } label: { Label("View", systemImage: "eye") }
+            Button { engine.copyPhoto(photo) } label: { Label("Copy", systemImage: "doc.on.doc") }
+            if let path = photo.localPath {
+                Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+                    label: { Label("Reveal in Finder", systemImage: "folder") }
+            } else {
+                Button { engine.downloadPhoto(photo) } label: { Label("Download full photo", systemImage: "arrow.down.circle") }
+            }
+        }
+    }
+
+    @ViewBuilder private var badge: some View {
+        if photo.downloading {
+            ProgressView().controlSize(.small).padding(4)
+                .background(.black.opacity(0.35), in: Circle()).padding(3)
+        } else if photo.localPath != nil {
+            Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.green).padding(3)
+        } else if photo.isVideo {
+            Image(systemName: "play.circle.fill").font(.caption).foregroundStyle(.white).padding(3)
+        }
     }
 }
