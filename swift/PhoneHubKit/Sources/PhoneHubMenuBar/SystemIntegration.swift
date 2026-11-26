@@ -30,14 +30,15 @@ import AppKit
         refresh()
     }
 
-    /// First time: ask the OS. After that the choice is locked, so send the user to
-    /// System Settings to change it.
-    func enableNotifications() {
-        if notificationsDetermined {
-            openNotificationSettings()
-        } else {
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
-                Task { @MainActor in self.refresh() }
+    /// Ask the OS for permission; if it can't be granted in-app (already decided,
+    /// or an unsigned build gets no prompt), open System Settings so the user can
+    /// flip it there. Either way, something happens.
+    func toggleNotifications(_ on: Bool) {
+        guard on else { openNotificationSettings(); return }   // can't revoke from here
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            Task { @MainActor in
+                self.refresh()
+                if !granted { self.openNotificationSettings() }
             }
         }
     }

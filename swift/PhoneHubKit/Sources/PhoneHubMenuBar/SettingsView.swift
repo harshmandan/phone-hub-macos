@@ -36,17 +36,20 @@ struct SettingsView: View {
             }
 
             Section("System") {
-                Toggle("Start at login", isOn: Binding(
-                    get: { system.startAtLogin },
-                    set: { system.setStartAtLogin($0) }))
-                LabeledContent("System notifications") {
-                    if system.notificationsAuthorized {
-                        Label("On", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(Palette.good).labelStyle(.titleAndIcon)
-                    } else {
-                        Button(system.notificationsDetermined ? "Open Settings…" : "Enable") {
-                            system.enableNotifications()
-                        }
+                Toggle(isOn: Binding(get: { system.startAtLogin }, set: { system.setStartAtLogin($0) })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Start at login")
+                        Text(system.startAtLogin ? "PhoneHub opens automatically when you log in."
+                                                  : "PhoneHub won't open until you launch it.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Toggle(isOn: Binding(get: { system.notificationsAuthorized }, set: { system.toggleNotifications($0) })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("System notifications")
+                        Text(system.notificationsAuthorized ? "Allowed — your phone's notifications show on the Mac."
+                             : "Not allowed. Turn on to grant it (or open System Settings).")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
