@@ -174,9 +174,14 @@ final class PhoneHubEngine: ObservableObject {
     /// Ask the phone to turn its hotspot on; the `tether ready` event then carries
     /// the credentials and we auto-join.
     func enableHotspot() {
-        guard let h = armStdin else { return }
+        guard let h = armStdin else { hotspot = .failed("Not armed yet — connect first."); return }
         hotspot = .turningOn
         try? h.write(contentsOf: Data("tether\n".utf8))
+        // Don't spin forever if the phone never sends credentials.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self else { return }
+            if case .turningOn = self.hotspot { self.hotspot = .failed("No response from the phone — try again.") }
+        }
     }
 
     /// Join the phone's hotspot Wi-Fi with CoreWLAN (scan then associate).
