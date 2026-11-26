@@ -28,10 +28,24 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
             let oc = device.openConnection()
             print("  openConnection → \(oc) (connected=\(device.isConnected()))")
         }
+        // Re-resolve the secure_channel RFCOMM channel from SDP each time — Android
+        // reassigns it per advertising window, so a cached number (13) goes stale.
+        var chan = BluetoothRFCOMMChannelID(channelID)
+        device.performSDPQuery(self)
+        let deadline = Date().addingTimeInterval(8)
+        while !sdpDone && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        }
+        if let resolved = secureChannelRfcomm(device) {
+            print("  SDP resolved secure_channel → RFCOMM channel \(resolved)")
+            chan = resolved
+        } else {
+            print("  SDP did not list secure_channel; trying channel \(chan) anyway")
+        }
         // Async open: the delegate's rfcommChannelOpenComplete reports the real
         // status (sync open collapses accept-then-drop into a generic error).
         var ch: IOBluetoothRFCOMMChannel?
-        let rc = device.openRFCOMMChannelAsync(&ch, withChannelID: BluetoothRFCOMMChannelID(channelID), delegate: self)
+        let rc = device.openRFCOMMChannelAsync(&ch, withChannelID: chan, delegate: self)
         print("  openRFCOMMChannelAsync kicked off → \(rc) (0x\(String(format: "%08x", UInt32(bitPattern: Int32(rc)))))")
         if rc != kIOReturnSuccess { print("could not start open"); return }
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
@@ -48,6 +62,30 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
         fc.start()
         startHandshake()
         receiveLoop()
+    }
+
+    private var sdpDone = false
+    @objc func sdpQueryComplete(_ device: IOBluetoothDevice!, status: IOReturn) { sdpDone = true }
+
+    /// The RFCOMM channel of the phone's secure_channel SDP record, if present.
+    private func secureChannelRfcomm(_ device: IOBluetoothDevice) -> BluetoothRFCOMMChannelID? {
+        let want = NearbyBt.serviceUuidString("secure_channel").lowercased()
+        guard let services = device.services as? [IOBluetoothSDPServiceRecord] else { return nil }
+        for rec in services {
+            var uuids: [String] = []
+            if let attrs = rec.attributes as? [NSNumber: IOBluetoothSDPDataElement] {
+                for (_, el) in attrs { collectUuids(el, into: &uuids) }
+            }
+            guard uuids.contains(where: { $0.lowercased().contains("a384bd4f") || $0.lowercased().contains(want) }) else { continue }
+            var ch: BluetoothRFCOMMChannelID = 0
+            if rec.getRFCOMMChannelID(&ch) == kIOReturnSuccess { return ch }
+        }
+        return nil
+    }
+
+    private func collectUuids(_ el: IOBluetoothSDPDataElement, into out: inout [String]) {
+        if let uuid = el.getUUIDValue() { out.append(uuid.description.replacingOccurrences(of: " ", with: "")) }
+        if let arr = el.getArrayValue() as? [IOBluetoothSDPDataElement] { for e in arr { collectUuids(e, into: &out) } }
     }
 
     private func log(_ s: String) { print("  [phonehub] \(s)") }
