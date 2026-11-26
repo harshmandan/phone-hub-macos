@@ -35,6 +35,20 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
     private let ukey = Ukey2.Client()
     private var nearby: SecureContext?             // layer 1 (Nearby UKEY2 channel)
 
+    // RFCOMM open state. The phone ROTATES its secure_channel RFCOMM server
+    // channel, so an SDP-resolved channel can already be stale by the time we
+    // open it — the phone then accepts the ACL but never completes the RFCOMM
+    // open (a silent hang). We bound each open with a timeout and retry with a
+    // freshly re-resolved channel.
+    private var device: IOBluetoothDevice?
+    private var openChannel: IOBluetoothRFCOMMChannel?
+    private var openTimer: Timer?
+    private var openAttempts = 0
+    private var opened = false                     // latches on the first successful open
+    private let maxOpenAttempts = 5
+    private let openTimeout: TimeInterval = 10
+    private var fallbackChannelID = 10
+
     // Layer 2: secure_channel DeviceToDevice auth over the Nearby channel.
     private let handshake: D2D.Handshake
     private var ctx: D2D.SecureContext?
@@ -66,7 +80,30 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
     public var fetchPhotos = false
     /// When true (implies fetchPhotos), also download the full-resolution files.
     public var downloadPhotos = false
-    public var photoDir = "/tmp/phonehub-photos"
+    /// Where thumbnails and downloaded files are written. Defaults to a per-user,
+    /// owner-only directory (not world-readable /tmp).
+    public var photoDir = PhoneHubClient.defaultPhotoDir
+
+    /// `~/Library/Application Support/PhoneHub/photos` — per-user, not shared like
+    /// /tmp. The directory is created 0700 and files 0600 (see `ensurePhotoDir`).
+    public static var defaultPhotoDir: String {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("PhoneHub/photos").path
+    }
+
+    /// Create `photoDir` owner-only, and tighten it if it already existed looser.
+    private func ensurePhotoDir() {
+        try? FileManager.default.createDirectory(atPath: photoDir, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: photoDir)
+    }
+
+    /// Write `data` to `path` and restrict it to owner read/write.
+    private func writeSecure(_ data: Data, to path: String) throws {
+        try data.write(to: URL(fileURLWithPath: path))
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+    }
     private var sentPhotoFetch = false
     private var photoByKey: [String: PhoneHub.Photo] = [:]
     private var pendingFiles: [Int64: PhoneHub.Photo] = [:]   // Nearby payload id → photo
@@ -95,34 +132,83 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
     public func begin(mac: String, channelID: Int) {
         setvbuf(stdout, nil, _IONBF, 0)
         guard let device = IOBluetoothDevice(addressString: mac) else { print("bad mac"); return }
-        log("opening RFCOMM to \(mac) channel \(channelID) …  connected=\(device.isConnected()) paired=\(device.isPaired())")
+        self.device = device
+        self.fallbackChannelID = channelID
+        log("opening RFCOMM to \(mac) …  connected=\(device.isConnected()) paired=\(device.isPaired())")
         if !device.isConnected() {
             let oc = device.openConnection()
             log("openConnection → \(oc) (connected=\(device.isConnected()))")
         }
-        // Re-resolve the secure_channel RFCOMM channel from SDP — Android reassigns
-        // it per advertising window, so a cached number goes stale.
-        var chan = BluetoothRFCOMMChannelID(channelID)
+        resolveAndOpen()
+    }
+
+    /// Re-resolve the CURRENT secure_channel RFCOMM channel from SDP and open it.
+    /// Android reassigns this channel per advertising window, so each attempt must
+    /// re-query SDP rather than reuse a cached number.
+    private func resolveAndOpen() {
+        guard let device else { return }
+        openAttempts += 1
+        var chan = BluetoothRFCOMMChannelID(fallbackChannelID)
+        sdpDone = false
         device.performSDPQuery(self)
         let deadline = Date().addingTimeInterval(8)
         while !sdpDone && Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
         }
         if let resolved = secureChannelRfcomm(device) {
-            log("SDP resolved secure_channel → RFCOMM channel \(resolved)")
+            log("SDP resolved secure_channel → RFCOMM channel \(resolved) (attempt \(openAttempts)/\(maxOpenAttempts))")
             chan = resolved
         } else {
-            log("SDP did not list secure_channel; trying channel \(chan) anyway")
+            log("SDP did not list secure_channel; trying channel \(chan) (attempt \(openAttempts)/\(maxOpenAttempts))")
         }
         var ch: IOBluetoothRFCOMMChannel?
         let rc = device.openRFCOMMChannelAsync(&ch, withChannelID: chan, delegate: self)
+        openChannel = ch
         log("openRFCOMMChannelAsync → \(rc) (0x\(String(format: "%08x", UInt32(bitPattern: Int32(rc)))))")
-        if rc != kIOReturnSuccess { print("could not start open") }
+        if rc != kIOReturnSuccess { retryOpenOrGiveUp("openRFCOMMChannelAsync failed (\(rc))"); return }
+        armOpenTimeout()
+    }
+
+    /// If the open doesn't complete in time (stale/rotated channel: the phone
+    /// accepts the ACL but has no server socket on that channel), retry with a
+    /// freshly re-resolved channel. We do NOT close the pending channel here — a
+    /// slow-but-live open can still complete, and `rfcommChannelOpenComplete`
+    /// adopts the first success and closes any later duplicate.
+    private func armOpenTimeout() {
+        openTimer?.invalidate()
+        openTimer = Timer.scheduledTimer(withTimeInterval: openTimeout, repeats: false) { [weak self] _ in
+            guard let self, !self.opened else { return }
+            self.log("RFCOMM open stalled \(Int(self.openTimeout))s — stale/rotated channel; re-resolving")
+            self.retryOpenOrGiveUp("open timed out")
+        }
+    }
+
+    private func retryOpenOrGiveUp(_ reason: String) {
+        openTimer?.invalidate(); openTimer = nil
+        guard !opened else { return }
+        guard openAttempts < maxOpenAttempts else {
+            log("giving up after \(openAttempts) RFCOMM open attempts (\(reason))")
+            return
+        }
+        // Brief delay so the phone's listener/SDP can settle between rotations.
+        Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+            guard let self, !self.opened else { return }
+            self.resolveAndOpen()
+        }
     }
 
     public func rfcommChannelOpenComplete(_ rfcommChannel: IOBluetoothRFCOMMChannel!, status error: IOReturn) {
+        // We may have re-opened on a rotated channel while an earlier (slow) open
+        // was still pending. Adopt the FIRST success; close any later duplicate so
+        // we never run two handshakes on one connection.
+        if opened {
+            if error == kIOReturnSuccess { rfcommChannel?.close() }
+            return
+        }
         log("rfcommChannelOpenComplete status=\(error) (0x\(String(format: "%08x", UInt32(bitPattern: Int32(error)))))")
-        guard error == kIOReturnSuccess else { log("open rejected by phone"); return }
+        guard error == kIOReturnSuccess else { log("open attempt rejected by phone"); retryOpenOrGiveUp("open rejected (\(error))"); return }
+        opened = true
+        openTimer?.invalidate(); openTimer = nil
         log("RFCOMM channel open ✅")
         let fc = RfcommFrameChannel(rfcommChannel)
         self.fc = fc
@@ -202,6 +288,8 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
     /// timer and frees reassembly buffers.
     private func teardown() {
         crosStateTimer?.invalidate(); crosStateTimer = nil
+        openTimer?.invalidate(); openTimer = nil
+        opened = false
         fc = nil
         pending.removeAll()
         pendingFiles.removeAll()
@@ -345,24 +433,24 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
     /// Write each thumbnail to `photoDir` and log the item.
     private func savePhotos(_ photos: [PhoneHub.Photo]) {
-        try? FileManager.default.createDirectory(atPath: photoDir, withIntermediateDirectories: true)
+        ensurePhotoDir()
         for p in photos {
             let info = "\(p.fileName.isEmpty ? p.key : p.fileName)  \(p.mime)  \(p.sizeBytes / 1024)KB"
             guard let data = p.thumbnail, !data.isEmpty else { log("   🖼  \(info) (no thumbnail)"); continue }
             let base = ((p.fileName.isEmpty ? p.key : p.fileName) as NSString).deletingPathExtension
             let safe = base.isEmpty ? "photo-\(abs(p.key.hashValue))" : base.replacingOccurrences(of: "/", with: "_")
             let path = "\(photoDir)/\(safe).thumb.\(p.thumbIsPng ? "png" : "jpg")"
-            do { try data.write(to: URL(fileURLWithPath: path)); log("   🖼  \(info) → \(path)") }
+            do { try writeSecure(data, to: path); log("   🖼  \(info) → \(path)") }
             catch { log("   🖼  \(info) (save failed: \(error))") }
         }
     }
 
     /// Write a downloaded full-resolution camera-roll file to `photoDir`.
     private func writeFullPhoto(_ p: PhoneHub.Photo, data: Data) {
-        try? FileManager.default.createDirectory(atPath: photoDir, withIntermediateDirectories: true)
+        ensurePhotoDir()
         let name = p.fileName.isEmpty ? "photo-\(abs(p.key.hashValue))" : p.fileName.replacingOccurrences(of: "/", with: "_")
         let path = "\(photoDir)/\(name)"
-        do { try data.write(to: URL(fileURLWithPath: path)); log("   ✅ downloaded \(data.count / 1024)KB → \(path)") }
+        do { try writeSecure(data, to: path); log("   ✅ downloaded \(data.count / 1024)KB → \(path)") }
         catch { log("   full-photo save failed: \(error)") }
     }
 
