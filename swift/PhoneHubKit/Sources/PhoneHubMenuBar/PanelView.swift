@@ -8,6 +8,8 @@ struct PanelView: View {
     @State private var pulse = 0.0   // slow flash for the status dot while connecting
 
     private var headerSubtitle: String {
+        if engine.btGate.isDenied { return "Needs Bluetooth permission" }
+        if engine.btGate.isUnknown { return "Waiting for Bluetooth…" }
         switch engine.status {
         case .connected:
             if let d = engine.phone.lastUpdated {
@@ -111,7 +113,16 @@ struct PanelView: View {
         VStack(spacing: 10) {
             Image(systemName: "iphone.gen3.radiowaves.left.and.right")
                 .font(.system(size: 34)).foregroundStyle(.secondary)
-            if engine.config.phoneBtMac.isEmpty {
+            if engine.btGate.isDenied {
+                Text("PhoneHub needs Bluetooth").font(.subheadline).foregroundStyle(.red)
+                Button { openBluetoothSettings() } label: {
+                    Label("Open Bluetooth Settings", systemImage: "gearshape").frame(maxWidth: .infinity)
+                }
+                .controlSize(.large).buttonStyle(.borderedProminent).tint(Palette.accent)
+            } else if engine.btGate.isUnknown {
+                Text("Allow Bluetooth to connect").font(.subheadline).foregroundStyle(.secondary)
+                Text("Click Allow on the macOS prompt.").font(.caption).foregroundStyle(.tertiary)
+            } else if engine.config.phoneBtMac.isEmpty {
                 Text("Set up your phone in Settings").font(.subheadline).foregroundStyle(.secondary)
                 Button { openSettings() } label: {
                     Label("Open Settings", systemImage: "gearshape").frame(maxWidth: .infinity)
@@ -121,12 +132,6 @@ struct PanelView: View {
                 // Connecting: no button, just the status + a spinner.
                 Text(engine.status.label).font(.subheadline).foregroundStyle(.secondary)
                 ProgressView().controlSize(.small)
-            } else if engine.btGate.isDenied {
-                Text("PhoneHub needs Bluetooth").font(.subheadline).foregroundStyle(.red)
-                Button { openBluetoothSettings() } label: {
-                    Label("Open Bluetooth Settings", systemImage: "gearshape").frame(maxWidth: .infinity)
-                }
-                .controlSize(.large).buttonStyle(.borderedProminent).tint(Palette.accent)
             } else {
                 if case .error(let m) = engine.status {
                     Text(m).font(.subheadline).foregroundStyle(.red).multilineTextAlignment(.center)

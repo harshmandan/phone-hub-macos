@@ -36,6 +36,7 @@ final class PhoneHubEngine: ObservableObject {
     private let armTimeout: TimeInterval = 45
     let btGate = BluetoothGate()
     private var wantConnected = false
+    private var btCancellable: AnyCancellable?
 
     /// Append a timestamped line to the app log (newest last, capped).
     func note(_ s: String) {
@@ -53,6 +54,8 @@ final class PhoneHubEngine: ObservableObject {
             self.note("Bluetooth ready.")
             self.connect()
         }
+        // Re-publish when the Bluetooth permission/power changes so the panel updates.
+        btCancellable = btGate.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         btGate.start()   // prompts for Bluetooth permission at launch, user present
         if config.activePhone != nil {
             DispatchQueue.main.async { [weak self] in self?.connect() }
@@ -67,7 +70,9 @@ final class PhoneHubEngine: ObservableObject {
         wantConnected = true
         // Bluetooth permission must be granted first (the arm can't run without it).
         if btGate.isDenied { status = .error("Allow Bluetooth in System Settings."); return }
-        if btGate.isUnknown { btGate.start(); status = .arming; note("Waiting for Bluetooth permission…"); return }
+        // Still waiting for the permission prompt — don't fake "arming"; the panel
+        // shows an Allow-Bluetooth state, and onReady resumes once it's granted.
+        if btGate.isUnknown { btGate.start(); note("Waiting for Bluetooth permission…"); return }
         arm?.terminate(); nc?.terminate(); arm = nil; nc = nil; armStdin = nil; ncStdin = nil
         notifications = []; photos = []
         armed = false; ncRetries = 0; armRestarts = 0; hotspot = .off
