@@ -67,6 +67,7 @@ enum Weave {
 
     final class PacketReceiver {
         private var nextCounter = 0
+        private var started = false
         private var buffer = Data()
         private var receiving = false
 
@@ -86,6 +87,9 @@ enum Weave {
 
         func receive(_ p: Data) throws -> Result {
             let count = Int((p[p.startIndex] >> 4) & 7)
+            // Sync to the peer's first packet counter — GMS may continue a weave
+            // counter from a prior session rather than restart at 0.
+            if !started { nextCounter = count; started = true }
             guard count == nextCounter % maxPacketCounter else { throw SequenceError(got: count) }
             nextCounter += 1
 

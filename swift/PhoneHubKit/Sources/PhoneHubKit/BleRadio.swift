@@ -97,10 +97,12 @@ public final class BleRadio: NSObject {
     /// Send a uWeave control packet (connection request/response/close).
     private func sendControl(_ packet: Data) { enqueue(packet) }
 
-    /// Chunk and send a full application message as uWeave data packets.
-    private func sendMessage(_ message: Data, label: String) {
-        let packets = generator.encodeDataMessage(message)
-        log("→ \(label) (\(message.count)B → \(packets.count) weave packets)")
+    /// WireMessage-frame a SecureChannel message and send it as uWeave data
+    /// packets (the phone's BleSecureChannel requires the WireMessage wrapper).
+    private func sendMessage(_ message: Data, feature: String, label: String) {
+        let wire = WireMessage.serialize(payload: message, feature: feature)
+        let packets = generator.encodeDataMessage(wire)
+        log("→ \(label) (\(message.count)B → wire \(wire.count)B → \(packets.count) packets)")
         packets.forEach(enqueue)
     }
 
@@ -199,7 +201,7 @@ extension BleRadio: CBPeripheralDelegate {
                 if cmd == Weave.connectionResponse, !helloSent {
                     helloSent = true
                     log("uWeave connected — sending D2D [Initiator Hello]")
-                    sendMessage(handshake.initiatorHello(), label: "[Initiator Hello]")
+                    sendMessage(handshake.initiatorHello(), feature: WireMessage.authFeature, label: "[Initiator Hello]")
                 } else if cmd == Weave.connectionClose {
                     log("uWeave connectionClose from phone")
                 }
@@ -213,14 +215,19 @@ extension BleRadio: CBPeripheralDelegate {
         }
     }
 
-    private func handleChannelMessage(_ message: Data) {
+    private func handleChannelMessage(_ wire: Data) {
+        // Incoming messages are WireMessage-framed; unwrap to the SecureMessage.
+        guard let message = WireMessage.payload(wire) else {
+            log("← non-WireMessage frame (\(wire.count)B): \(wire.prefix(32).hex)")
+            return
+        }
         if context == nil {
-            // First data message after the hello = the phone's [Responder Auth].
+            // First message after the hello = the phone's [Responder Auth].
             log("← [Responder Auth] (\(message.count)B) — deriving session, sending [Initiator Auth]")
             do {
                 let auth = try handshake.initiatorAuth(forResponderAuth: message)
                 context = handshake.context
-                sendMessage(auth, label: "[Initiator Auth]")
+                sendMessage(auth, feature: WireMessage.authFeature, label: "[Initiator Auth]")
                 log("🔑 D2D secure channel established — awaiting Phone Hub messages")
             } catch {
                 log("D2D auth failed: \(error)")
