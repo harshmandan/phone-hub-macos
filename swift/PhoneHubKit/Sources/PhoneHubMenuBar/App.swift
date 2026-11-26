@@ -35,8 +35,8 @@ struct PhoneHubApp: App {
                 .frame(width: 520, height: 480)
         }
 
-        Window("Sign in to Google", id: "signin") {
-            SignInView().environmentObject(engine)
+        Window("Set up a phone", id: "wizard") {
+            SetupWizardView().environmentObject(engine)
         }
         .windowResizability(.contentSize)
     }

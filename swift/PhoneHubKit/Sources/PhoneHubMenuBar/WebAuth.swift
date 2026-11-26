@@ -28,13 +28,7 @@ struct SignInView: View {
                 .frame(minWidth: 420, minHeight: 520)
         }
         .frame(width: 460, height: 600)
-        .onAppear {
-            WindowActivation.enter()   // focus so the Google login can take keyboard input
-            controller.onSignedIn = { email in
-                engine.config.account = email
-                ConfigStore.save(engine.config)
-            }
-        }
+        .onAppear { WindowActivation.enter() }   // focus so the Google login can take keyboard input
         .onDisappear { WindowActivation.leave() }
     }
 

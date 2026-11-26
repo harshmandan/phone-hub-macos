@@ -74,14 +74,29 @@ enum HotspotStatus: Equatable {
     }
 }
 
-/// Persisted app configuration (also what config export/import round-trips).
+/// One set-up phone (identity + keys live in its own folder; the account is the
+/// Google account it's linked to). We never store a password — only a token.
+struct PhoneSetup: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var name = "Phone"
+    var btMac = ""
+    var account = ""
+    var identityPath = ""             // this phone's phone_identity.json
+}
+
+/// Persisted app configuration. One phone is "active" (connected) at a time;
+/// the list is ready for multiple later.
 struct AppConfig: Codable, Equatable {
-    var phoneBtMac: String = ""
-    var phoneName: String = "Phone"
-    var account: String = ""
-    var identityPath: String = ""     // phone_identity.json
-    var autoConnect: Bool = false
-    var showNotifications: Bool = true
-    var esp32Port: String = ""
-    var esp32Fqbn: String = "esp32:esp32:XIAO_ESP32C6"
+    var phones: [PhoneSetup] = []
+    var activePhoneId: UUID?
+    var startAtLogin = false
+
+    /// The phone we connect to (the chosen one, else the first).
+    var activePhone: PhoneSetup? { phones.first { $0.id == activePhoneId } ?? phones.first }
+
+    // Read-only convenience for the single-active-phone engine/panel.
+    var phoneBtMac: String { activePhone?.btMac ?? "" }
+    var identityPath: String { activePhone?.identityPath ?? "" }
+    var phoneName: String { activePhone?.name ?? "Phone" }
+    var account: String { activePhone?.account ?? "" }
 }

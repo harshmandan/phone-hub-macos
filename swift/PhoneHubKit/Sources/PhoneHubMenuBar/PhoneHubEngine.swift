@@ -31,7 +31,9 @@ final class PhoneHubEngine: ObservableObject {
 
     init(config: AppConfig) {
         self.config = config
-        if config.autoConnect {
+        // Always connect to the active phone on launch (start/stop is automatic;
+        // the panel still has a manual Connect/Disconnect).
+        if config.activePhone != nil {
             DispatchQueue.main.async { [weak self] in self?.connect() }
         }
     }
@@ -51,6 +53,14 @@ final class PhoneHubEngine: ObservableObject {
         nc = nil; arm = nil; ncStdin = nil; armStdin = nil
         hotspot = .off
         status = .disconnected
+    }
+
+    /// Drop any current connection and connect to the active phone (after the
+    /// active phone changes, or a phone is added/removed).
+    func reconnect() {
+        disconnect()
+        guard config.activePhone != nil else { return }
+        DispatchQueue.main.async { [weak self] in self?.connect() }
     }
 
     // MARK: commands
