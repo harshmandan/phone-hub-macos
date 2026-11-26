@@ -75,6 +75,45 @@ public enum Ukey2 {
         }
     }
 
+    /// Client/initiator side (we connect out; the phone is the server). We send
+    /// ClientInit (committing to our ClientFinished), receive ServerInit, then
+    /// send ClientFinished and derive the shared outputs.
+    public final class Client {
+        private let clientKey = P256.KeyAgreement.PrivateKey()
+        private var wrappedClientInit = Data()
+        private var wrappedClientFinished = Data()
+
+        public init() {}
+
+        /// Build the wrapped ClientInit (carries the commitment to ClientFinished).
+        public func clientInit() -> Data {
+            let clientFinished = Pb.bytes(1, SecureMessage.genericPublicKey(clientKey.publicKey))
+            wrappedClientFinished = wrap(type: typeClientFinish, data: clientFinished)
+            let commitment = Data(SHA512.hash(data: wrappedClientFinished))
+            var ci = Data()
+            ci += Pb.varint(1, 1)                                      // version
+            ci += Pb.bytes(2, rand(32))                               // random
+            ci += Pb.message(3, Pb.varint(1, cipherP256Sha512) + Pb.bytes(2, commitment))
+            ci += Pb.bytes(4, Data(nextProtocol.utf8))               // next_protocol
+            wrappedClientInit = wrap(type: typeClientInit, data: ci)
+            return wrappedClientInit
+        }
+
+        /// Given the server's wrapped ServerInit, return our wrapped ClientFinished
+        /// to send, plus the derived channel outputs.
+        public func handleServerInit(_ serverInitRaw: Data) throws -> (clientFinished: Data, derived: Derived) {
+            let msg = Pb.readFields(serverInitRaw)
+            guard msg.varint(1) == typeServerInit, let si = msg.bytes(2) else {
+                throw SecureMessage.SecureMessageError(message: "not a ServerInit")
+            }
+            let s = Pb.readFields(si)
+            let serverPub = try SecureMessage.parseGenericPublicKey(s.bytes(4) ?? Data())
+            let derived = try derive(ownPrivate: clientKey, peerPublic: serverPub,
+                                     wrappedClientInit: wrappedClientInit, wrappedServerInit: serverInitRaw)
+            return (wrappedClientFinished, derived)
+        }
+    }
+
     static func hkdf(_ ikm: Data, salt: Data, info: Data, length: Int) -> Data {
         CryptoKit.HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: ikm),
                                          salt: salt, info: info, outputByteCount: length)

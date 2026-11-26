@@ -35,6 +35,11 @@ do {
         NearbyAdvertiser(name: Host.current().localizedName ?? "Mac").run(seconds: secs)
     } else if args.count >= 2 && args[1] == "nettest" {
         print(NearbyTransport.loopbackTest() ? "loopback frame transport OK" : "loopback FAILED")
+    } else if args.count >= 3 && args[1] == "phonehub" {
+        // phonehub <phone-mac> [rfcomm-channel=13] [seconds=60]
+        let channel = args.count >= 4 ? (Int(args[3]) ?? 13) : 13
+        let secs = args.count >= 5 ? (Double(args[4]) ?? 60) : 60
+        PhoneHubClient().run(mac: args[2], channelID: channel, seconds: secs)
     } else if args.count >= 3 && args[1] == "sdp" {
         // sdp <phone-mac> [uuid-substring]  — browse the phone's BT services.
         let want = args.count >= 4 ? args[3] : "a384bd4f"  // "secure_channel" Nearby UUID
