@@ -34,6 +34,8 @@ final class PhoneHubEngine: ObservableObject {
     private var armed = false
     private var connectGen = 0           // invalidates stale arm-timeout checks
     private let armTimeout: TimeInterval = 45
+    let btGate = BluetoothGate()
+    private var wantConnected = false
 
     /// Append a timestamped line to the app log (newest last, capped).
     func note(_ s: String) {
@@ -44,8 +46,14 @@ final class PhoneHubEngine: ObservableObject {
 
     init(config: AppConfig) {
         self.config = config
-        // Always connect to the active phone on launch (start/stop is automatic;
-        // the panel still has a manual Connect/Disconnect).
+        // When Bluetooth becomes usable (user allowed the prompt / turned BT on),
+        // connect automatically — no app restart needed.
+        btGate.onReady = { [weak self] in
+            guard let self, self.wantConnected, self.status != .connected, !self.status.isBusy else { return }
+            self.note("Bluetooth ready.")
+            self.connect()
+        }
+        btGate.start()   // prompts for Bluetooth permission at launch, user present
         if config.activePhone != nil {
             DispatchQueue.main.async { [weak self] in self?.connect() }
         }
@@ -54,8 +62,12 @@ final class PhoneHubEngine: ObservableObject {
     // MARK: lifecycle
 
     func connect() {
-        // Allow (re)connecting from disconnected OR error — not while busy/connected.
-        guard !status.isBusy, status != .connected, !config.phoneBtMac.isEmpty, !config.identityPath.isEmpty else { return }
+        guard !config.phoneBtMac.isEmpty, !config.identityPath.isEmpty else { return }
+        guard !status.isBusy, status != .connected else { return }
+        wantConnected = true
+        // Bluetooth permission must be granted first (the arm can't run without it).
+        if btGate.isDenied { status = .error("Allow Bluetooth in System Settings."); return }
+        if btGate.isUnknown { btGate.start(); status = .arming; note("Waiting for Bluetooth permission…"); return }
         arm?.terminate(); nc?.terminate(); arm = nil; nc = nil; armStdin = nil; ncStdin = nil
         notifications = []; photos = []
         armed = false; ncRetries = 0; armRestarts = 0; hotspot = .off
@@ -70,11 +82,12 @@ final class PhoneHubEngine: ObservableObject {
             guard let self, self.connectGen == gen, !self.armed, self.status == .arming else { return }
             self.note("Couldn't reach the phone over Bluetooth (out of range or locked).")
             self.arm?.terminate(); self.arm = nil; self.armStdin = nil
-            self.status = .error("Can't reach your phone. Unlock it and keep it within a metre of the Mac.")
+            self.status = .error("Phone out of range")
         }
     }
 
     func disconnect() {
+        wantConnected = false
         connectGen += 1
         nc?.terminate(); arm?.terminate()
         nc = nil; arm = nil; ncStdin = nil; armStdin = nil
@@ -251,7 +264,7 @@ final class PhoneHubEngine: ObservableObject {
         guard status != .disconnected else { return }   // we asked for it
         arm = nil; armStdin = nil; armed = false
         guard armRestarts < 4 else {
-            status = .error("Bluetooth keeps dropping. Unlock the phone and keep it within a metre of the Mac.")
+            status = .error("Bluetooth keeps dropping")
             return
         }
         armRestarts += 1
@@ -284,9 +297,9 @@ final class PhoneHubEngine: ObservableObject {
             lastLog = "retrying Nearby connection (\(ncRetries)/4) in \(Int(delay))s…"
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.startNC() }
         } else if status == .connected {
-            status = .error("connection dropped")
+            status = .error("Connection dropped")
         } else {
-            status = .error("could not reach Phone Hub")
+            status = .error("Couldn't connect")
         }
     }
 

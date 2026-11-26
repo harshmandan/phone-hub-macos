@@ -45,5 +45,9 @@ cat > "$APP/Contents/Info.plist" <<'PLISTEOF'
 PLISTEOF
 
 echo "bundled: $APP"
+# Ad-hoc sign the bundle (and the embedded CLI) so CoreBluetooth has a signed
+# identity and the Bluetooth permission is tracked consistently.
+echo "signing (ad-hoc)…"
+codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "  (codesign failed — continuing unsigned)"
 echo "launching…"
 open "$APP"

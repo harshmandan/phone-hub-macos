@@ -94,6 +94,12 @@ struct PanelView: View {
         }
     }
 
+    private func openBluetoothSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     private func batteryIcon(_ b: Int) -> String {
         switch b { case ..<13: return "battery.0"; case ..<38: return "battery.25"
         case ..<63: return "battery.50"; case ..<88: return "battery.75"; default: return "battery.100" }
@@ -115,9 +121,15 @@ struct PanelView: View {
                 // Connecting: no button, just the status + a spinner.
                 Text(engine.status.label).font(.subheadline).foregroundStyle(.secondary)
                 ProgressView().controlSize(.small)
+            } else if engine.btGate.isDenied {
+                Text("PhoneHub needs Bluetooth").font(.subheadline).foregroundStyle(.red)
+                Button { openBluetoothSettings() } label: {
+                    Label("Open Bluetooth Settings", systemImage: "gearshape").frame(maxWidth: .infinity)
+                }
+                .controlSize(.large).buttonStyle(.borderedProminent).tint(Palette.accent)
             } else {
                 if case .error(let m) = engine.status {
-                    Text(m).font(.caption).foregroundStyle(.red).multilineTextAlignment(.center)
+                    Text(m).font(.subheadline).foregroundStyle(.red).multilineTextAlignment(.center)
                 } else {
                     Text("Not connected").font(.subheadline).foregroundStyle(.secondary)
                 }
