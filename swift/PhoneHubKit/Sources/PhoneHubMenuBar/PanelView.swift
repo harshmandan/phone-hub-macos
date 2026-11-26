@@ -36,9 +36,7 @@ struct PanelView: View {
         .padding(14)
         .frame(width: 360)
         .focusEffectDisabled()
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) { pulse = 1 }
-        }
+        .onAppear { pulse = 1 }
     }
 
     // MARK: header
@@ -54,6 +52,7 @@ struct PanelView: View {
                     Text(engine.config.phoneName).font(.headline)
                     Circle().fill(statusColor).frame(width: 8, height: 8)
                         .opacity(engine.status.isBusy ? (0.3 + 0.7 * pulse) : 1)
+                        .animation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true), value: pulse)
                 }
                 Text(headerSubtitle).font(.caption).foregroundStyle(.secondary)
             }
