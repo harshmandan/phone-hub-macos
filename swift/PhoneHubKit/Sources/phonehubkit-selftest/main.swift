@@ -35,6 +35,10 @@ do {
         NearbyAdvertiser(name: Host.current().localizedName ?? "Mac").run(seconds: secs)
     } else if args.count >= 2 && args[1] == "nettest" {
         print(NearbyTransport.loopbackTest() ? "loopback frame transport OK" : "loopback FAILED")
+    } else if args.count >= 3 && args[1] == "sdp" {
+        // sdp <phone-mac> [uuid-substring]  — browse the phone's BT services.
+        let want = args.count >= 4 ? args[3] : "a384bd4f"  // "secure_channel" Nearby UUID
+        SdpProbe().run(mac: args[2], wantUuid: want)
     } else if args.count >= 2 && args[1] == "scan" {
         let secs = args.count >= 3 ? (Double(args[2]) ?? 15) : 15
         let idPath = args.count >= 4 ? args[3] : "../../probe/phone_identity.json"
