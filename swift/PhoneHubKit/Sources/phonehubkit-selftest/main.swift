@@ -1,5 +1,6 @@
 import Foundation
 import PhoneHubKit
+import CryptoKit
 
 let args = CommandLine.arguments
 do {
@@ -53,8 +54,29 @@ do {
             }
         }
         if seeds.isEmpty { print("no phone beacon seeds at \(idPath)"); exit(1) }
-        let radio = BleRadio(remoteSeeds: seeds)
-        radio.onMessage = { print("  [ble] 🔓 channel message \($0.count)B: \($0.prefix(80).hex)") }
+        // Phone's long-term public key (generic-public-key bytes from its
+        // decrypted metadata) and our long-term device private key PEM
+        // (device_keys.json) — the D2D auth inputs (parsed inside BleRadio).
+        guard let idData = FileManager.default.contents(atPath: idPath),
+              let idj = try? JSONSerialization.jsonObject(with: idData) as? [String: Any],
+              let phonePubB64 = idj["handshakePubKeyB64"] as? String,
+              let phonePubRaw = Data(base64Encoded: phonePubB64) else {
+            print("could not load phone handshake pubkey from \(idPath)"); exit(1)
+        }
+        let keysPath = (idPath as NSString).deletingLastPathComponent + "/device_keys.json"
+        guard let kData = FileManager.default.contents(atPath: keysPath),
+              let kj = try? JSONSerialization.jsonObject(with: kData) as? [String: Any],
+              let keys = kj["keys"] as? [String: Any],
+              let bt = keys["DeviceSync:BetterTogether"] as? [String: Any],
+              let pem = bt["privatePem"] as? String else {
+            print("could not load our device key from \(keysPath)"); exit(1)
+        }
+        let radio: BleRadio
+        do {
+            radio = try BleRadio(remoteSeeds: seeds, ourLongTermPrivatePem: pem,
+                                 phoneLongTermPublicGeneric: phonePubRaw)
+        } catch { print("BleRadio init failed: \(error)"); exit(1) }
+        radio.onMessage = { print("  [ble] app payload \($0.count)B: \($0.prefix(80).hex)") }
         radio.run(seconds: secs)
     } else if args.count >= 3 && args[1] == "phonehub" {
         // phonehub <phone-mac> [rfcomm-channel=13] [seconds=60]

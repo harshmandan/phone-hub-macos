@@ -1,5 +1,6 @@
 import Foundation
 import CoreBluetooth
+import CryptoKit
 
 /// The CoreBluetooth radio: the Mac acts as BLE central, finds the phone by its
 /// rotating EID, connects, and runs uWeave over the TX/RX characteristics.
@@ -29,18 +30,30 @@ public final class BleRadio: NSObject {
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var tx: CBCharacteristic?
-    private let receiver = Weave.PacketReceiver()
-    private let generator = Weave.PacketGenerator()
+    private var receiver = Weave.PacketReceiver()
+    private var generator = Weave.PacketGenerator()
 
     /// The remote phone's beacon seeds (from its DeviceSync metadata), used to
     /// recognise its rotating advertisement.
     private let remoteSeeds: [Eid.BeaconSeed]
 
+    // D2D SecureChannel auth over the weave channel.
+    private let handshake: D2D.Handshake
+    private var helloSent = false
+    private var context: D2D.SecureContext?
+    private var writeQueue: [Data] = []
+    private var writing = false
+
     /// Called with each fully-reassembled secure-channel message.
     public var onMessage: ((Data) -> Void)?
 
-    public init(remoteSeeds: [Eid.BeaconSeed]) {
+    public init(remoteSeeds: [Eid.BeaconSeed],
+                ourLongTermPrivatePem: String,
+                phoneLongTermPublicGeneric: Data) throws {
         self.remoteSeeds = remoteSeeds
+        let priv = try P256.KeyAgreement.PrivateKey(pemRepresentation: ourLongTermPrivatePem)
+        let pub = try SecureMessage.parseGenericPublicKey(phoneLongTermPublicGeneric)
+        self.handshake = try D2D.Handshake(ourLongTermPrivate: priv, phoneLongTermPublic: pub)
         super.init()
     }
 
@@ -62,18 +75,39 @@ public final class BleRadio: NSObject {
 
     private func log(_ s: String) { print("  [ble] \(s)") }
 
-    private func send(_ packet: Data) {
-        guard let p = peripheral, let tx else { return }
-        // Match the characteristic: this phone's TX is [write] (with response),
-        // not writeWithoutResponse — a mismatched type is silently dropped.
+    /// Queue one raw weave packet and pump the queue. Writes are serialized:
+    /// the phone's TX is [write] (with response), so we wait for each
+    /// didWriteValueFor before the next (a .withoutResponse write to a
+    /// [write]-only characteristic is silently dropped).
+    private func enqueue(_ packet: Data) {
+        writeQueue.append(packet)
+        pump()
+    }
+
+    private func pump() {
+        guard !writing, let p = peripheral, let tx, !writeQueue.isEmpty else { return }
         let type: CBCharacteristicWriteType =
             tx.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
-        log("→ write \(packet.count)B [\(type == .withResponse ? "withResp" : "noResp")]: \(packet.prefix(32).hex)")
+        let packet = writeQueue.removeFirst()
+        writing = true
         p.writeValue(packet, for: tx, type: type)
+        if type == .withoutResponse { writing = false; pump() }
+    }
+
+    /// Send a uWeave control packet (connection request/response/close).
+    private func sendControl(_ packet: Data) { enqueue(packet) }
+
+    /// Chunk and send a full application message as uWeave data packets.
+    private func sendMessage(_ message: Data, label: String) {
+        let packets = generator.encodeDataMessage(message)
+        log("→ \(label) (\(message.count)B → \(packets.count) weave packets)")
+        packets.forEach(enqueue)
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error { log("write error: \(error.localizedDescription)") }
+        writing = false
+        pump()
     }
 }
 
@@ -153,7 +187,7 @@ extension BleRadio: CBPeripheralDelegate {
         guard tx != nil else { log("no TX characteristic — weave service mismatch?"); return }
         // uWeave starts with a connection request.
         log("→ uWeave ConnectionRequest")
-        send(generator.connectionRequest())
+        sendControl(generator.connectionRequest())
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -161,24 +195,45 @@ extension BleRadio: CBPeripheralDelegate {
         log("← weave rx \(value.count)B: \(value.prefix(48).hex)")
         do {
             switch try receiver.receive(value) {
-            case .control:
-                break  // connection response / close
+            case .control(let cmd):
+                if cmd == Weave.connectionResponse, !helloSent {
+                    helloSent = true
+                    log("uWeave connected — sending D2D [Initiator Hello]")
+                    sendMessage(handshake.initiatorHello(), label: "[Initiator Hello]")
+                } else if cmd == Weave.connectionClose {
+                    log("uWeave connectionClose from phone")
+                }
             case .incomplete:
-                break  // more packets to come
+                break  // more packets of a data message to come
             case .message(let message):
                 handleChannelMessage(message)
             }
         } catch {
-            // out-of-sequence / framing error — real code tears the link down
+            log("weave receive error: \(error)")
         }
     }
 
     private func handleChannelMessage(_ message: Data) {
-        // PHONE-GATED. Before the channel is up, these bytes are handshake
-        // messages ([ResponderAuth], …); after, they are feature messages
-        // decoded through SecureContext. Both need the authenticator, which
-        // needs the multidevice pairing — and a phone — to implement. See
-        // docs/ble.md and docs/swift-client.md.
-        onMessage?(message)
+        if context == nil {
+            // First data message after the hello = the phone's [Responder Auth].
+            log("← [Responder Auth] (\(message.count)B) — deriving session, sending [Initiator Auth]")
+            do {
+                let auth = try handshake.initiatorAuth(forResponderAuth: message)
+                context = handshake.context
+                sendMessage(auth, label: "[Initiator Auth]")
+                log("🔑 D2D secure channel established — awaiting Phone Hub messages")
+            } catch {
+                log("D2D auth failed: \(error)")
+            }
+            return
+        }
+        // Secure channel is up: decrypt feature messages.
+        do {
+            let payload = try context!.decode(message)
+            log("🔓 feature message \(payload.count)B: \(payload.prefix(80).hex)")
+            onMessage?(payload)
+        } catch {
+            log("decode failed (\(message.count)B): \(error)")
+        }
     }
 }

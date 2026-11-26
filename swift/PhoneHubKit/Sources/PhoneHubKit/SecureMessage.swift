@@ -6,6 +6,7 @@ import CommonCrypto
 /// Swift port of the probe's `securemessage.py`, verified against it.
 enum SecureMessage {
     static let sigHmacSha256: UInt64 = 1
+    static let encNone: UInt64 = 1
     static let encAes256Cbc: UInt64 = 2
     static let publicKeyTypeEcP256: UInt64 = 1
 
@@ -96,24 +97,40 @@ enum SecureMessage {
 
     static func create(key: Data, payload: Data,
                        publicMetadata: Data = Data(),
-                       decryptionKeyId: Data = Data()) -> Data {
-        let encKey = hkdf(key, Data("ENC:2".utf8))
+                       decryptionKeyId: Data = Data(),
+                       encrypt: Bool = true,
+                       associatedData: Data = Data()) -> Data {
         let sigKey = hkdf(key, Data("SIG:1".utf8))
 
-        var iv = Data(count: 16)
-        iv.withUnsafeMutableBytes { _ = SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
-        let body = aesCbc(encrypt: true, key: encKey, iv: iv, data: payload)
-
-        var header = Pb.varint(1, sigHmacSha256) + Pb.varint(2, encAes256Cbc)
+        var header = Pb.varint(1, sigHmacSha256) + Pb.varint(2, encrypt ? encAes256Cbc : encNone)
         if !decryptionKeyId.isEmpty { header += Pb.bytes(4, decryptionKeyId) }
-        // securemessage.proto Header: iv = 5, public_metadata = 6 (field order on
-        // the wire matches what a real phone sends: iv before metadata).
-        header += Pb.bytes(5, iv)
+        var body: Data
+        if encrypt {
+            let encKey = hkdf(key, Data("ENC:2".utf8))
+            var iv = Data(count: 16)
+            iv.withUnsafeMutableBytes { _ = SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
+            body = aesCbc(encrypt: true, key: encKey, iv: iv, data: payload)
+            header += Pb.bytes(5, iv)          // iv = field 5 (before metadata, as the phone sends)
+        } else {
+            body = payload                      // NONE: body is the plaintext
+        }
         if !publicMetadata.isEmpty { header += Pb.bytes(6, publicMetadata) }
+        if !associatedData.isEmpty { header += Pb.varint(7, UInt64(associatedData.count)) }
 
         let headerAndBody = Pb.bytes(1, header) + Pb.bytes(2, body)
-        let sig = Data(HMAC<SHA256>.authenticationCode(for: headerAndBody, using: SymmetricKey(data: sigKey)))
+        // The signature covers headerAndBody || associated_data (associated_data
+        // itself is NOT transmitted — only its length, in header field 7).
+        let sig = Data(HMAC<SHA256>.authenticationCode(for: headerAndBody + associatedData,
+                                                       using: SymmetricKey(data: sigKey)))
         return Pb.bytes(1, headerAndBody) + Pb.bytes(2, sig)
+    }
+
+    /// Read a header field (e.g. 4 = decryption_key_id) from a serialized
+    /// SecureMessage without verifying or decrypting it.
+    static func headerField(_ secureMessage: Data, _ field: Int) -> Data? {
+        let sm = Pb.readFields(secureMessage)
+        let hab = Pb.readFields(sm.bytes(1) ?? Data())
+        return Pb.readFields(hab.bytes(1) ?? Data()).bytes(field)
     }
 
     struct SecureMessageError: Error { let message: String }
