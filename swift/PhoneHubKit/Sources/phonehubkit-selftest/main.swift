@@ -37,7 +37,22 @@ do {
         print(NearbyTransport.loopbackTest() ? "loopback frame transport OK" : "loopback FAILED")
     } else if args.count >= 2 && args[1] == "scan" {
         let secs = args.count >= 3 ? (Double(args[2]) ?? 15) : 15
-        Scanner().run(seconds: secs)
+        let idPath = args.count >= 4 ? args[3] : "../../probe/phone_identity.json"
+        var seeds: [Eid.BeaconSeed] = []
+        var label = ""
+        if let data = FileManager.default.contents(atPath: idPath),
+           let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let arr = j["beaconSeeds"] as? [[String: Any]] {
+            label = (j["name"] as? String) ?? "phone"
+            for s in arr {
+                if let hex = s["dataHex"] as? String,
+                   let start = (s["startMs"] as? NSNumber)?.int64Value,
+                   let end = (s["endMs"] as? NSNumber)?.int64Value {
+                    seeds.append(Eid.BeaconSeed(data: Data(hex: hex), startTimeMs: start, endTimeMs: end))
+                }
+            }
+        }
+        Scanner(targetSeeds: seeds, targetLabel: label).run(seconds: secs)
     } else if args.count == 4 && args[1] == "diag" {
         print(try await Enrollment.diag(email: args[2], masterToken: args[3]))
     } else if args.count == 4 && args[1] == "sync" {

@@ -1,7 +1,7 @@
 import Foundation
 
 extension Data {
-    init(hex: String) {
+    public init(hex: String) {
         var out = Data()
         var idx = hex.startIndex
         while idx < hex.endIndex {
