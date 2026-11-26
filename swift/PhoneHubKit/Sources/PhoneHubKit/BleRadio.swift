@@ -14,11 +14,14 @@ import CoreBluetooth
 /// connection.cc). The advertising service UUID is marked to confirm against a
 /// real phone — the source file would not fetch cleanly.
 public final class BleRadio: NSObject {
-    // Confirmed from source.
-    static let txCharacteristicUUID = CBUUID(string: "00000100-0004-1000-8000-001A11000101")
-    static let rxCharacteristicUUID = CBUUID(string: "00000100-0004-1000-8000-001A11000102")
-    // TODO(phone): confirm the advertising/GATT service UUID against a device.
-    static let serviceUUID = CBUUID(string: "0000FEF3-0000-1000-8000-00805F9B34FB")
+    // The phone advertises its presence EID as service DATA under FE50; the
+    // actual uWeave GATT service is a SEPARATE UUID (b3b7e28e), with the
+    // post-uWeave-migration TX/RX characteristics (ble_constants.h /
+    // ble_weave_client_connection current values).
+    static let advertServiceUUID = CBUUID(string: "0000FE50-0000-1000-8000-00805F9B34FB")
+    static let gattServiceUUID = CBUUID(string: "b3b7e28e-a000-3e17-bd86-6e97b9e28c11")
+    static let txCharacteristicUUID = CBUUID(string: "977c6674-1239-4e72-993b-502369b8bb5a")
+    static let rxCharacteristicUUID = CBUUID(string: "f4b904a2-a030-43b3-98a8-221c536c03cb")
 
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
@@ -39,8 +42,14 @@ public final class BleRadio: NSObject {
     }
 
     public func start() {
+        setvbuf(stdout, nil, _IONBF, 0)
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let eids = Eid.nearestEids(remoteSeeds, nowMs: now).map { $0.eid.hex }
+        log("start — phone's current EIDs: \(eids.joined(separator: " "))")
         central = CBCentralManager(delegate: self, queue: nil)
     }
+
+    private func log(_ s: String) { print("  [ble] \(s)") }
 
     private func send(_ packet: Data) {
         guard let p = peripheral, let tx else { return }
@@ -50,18 +59,26 @@ public final class BleRadio: NSObject {
 
 extension BleRadio: CBCentralManagerDelegate {
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        log("central state: \(central.state.rawValue) (5=poweredOn)")
         if central.state == .poweredOn {
-            central.scanForPeripherals(withServices: [Self.serviceUUID])
+            // Scan everything (the phone's FE50 presence EID is service DATA, not
+            // always in the advertised service-UUID list) with duplicates so a
+            // rotating/intermittent advert isn't missed.
+            central.scanForPeripherals(withServices: nil,
+                options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+            log("scanning for the phone's FE50 EID …")
         }
     }
 
     public func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                                advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        // Match the phone's rotating EID carried in the advertisement service data.
-        let serviceData = advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data]
-        guard let eidData = serviceData?[Self.serviceUUID],
-              Eid.matches(advertisementServiceData: eidData, remoteSeeds: remoteSeeds,
-                          nowMs: Int64(Date().timeIntervalSince1970 * 1000)) else { return }
+        guard self.peripheral == nil else { return }
+        let serviceData = advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data] ?? [:]
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        // Match the phone's rotating EID in the FE50 service data.
+        guard let eidData = serviceData[Self.advertServiceUUID],
+              Eid.matches(advertisementServiceData: eidData, remoteSeeds: remoteSeeds, nowMs: now) else { return }
+        log("★ phone found — FE50=\(eidData.hex) rssi=\(RSSI) name=\(peripheral.name ?? "?"); connecting …")
         central.stopScan()
         self.peripheral = peripheral
         peripheral.delegate = self
@@ -69,28 +86,50 @@ extension BleRadio: CBCentralManagerDelegate {
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        peripheral.discoverServices([Self.serviceUUID])
+        log("connected ✅ — discovering weave service b3b7e28e …")
+        peripheral.discoverServices([Self.gattServiceUUID])
+    }
+
+    public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        log("didFailToConnect: \(error?.localizedDescription ?? "?") — rescanning")
+        self.peripheral = nil
+        central.scanForPeripherals(withServices: nil,
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+    }
+
+    public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        log("disconnected: \(error?.localizedDescription ?? "clean"); rescanning")
+        self.peripheral = nil; self.tx = nil
+        central.scanForPeripherals(withServices: nil,
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
     }
 }
 
 extension BleRadio: CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        for service in peripheral.services ?? [] where service.uuid == Self.serviceUUID {
+        let found = (peripheral.services ?? []).map { $0.uuid.uuidString }
+        log("services: \(found.isEmpty ? "none" : found.joined(separator: ", "))")
+        for service in peripheral.services ?? [] where service.uuid == Self.gattServiceUUID {
             peripheral.discoverCharacteristics([Self.txCharacteristicUUID, Self.rxCharacteristicUUID], for: service)
         }
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        let chars = (service.characteristics ?? []).map { $0.uuid.uuidString }
+        log("characteristics of \(service.uuid): \(chars.joined(separator: ", "))")
         for c in service.characteristics ?? [] {
             if c.uuid == Self.txCharacteristicUUID { tx = c }
             if c.uuid == Self.rxCharacteristicUUID { peripheral.setNotifyValue(true, for: c) }
         }
+        guard tx != nil else { log("no TX characteristic — weave service mismatch?"); return }
         // uWeave starts with a connection request.
+        log("→ uWeave ConnectionRequest")
         send(generator.connectionRequest())
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard characteristic.uuid == Self.rxCharacteristicUUID, let value = characteristic.value else { return }
+        log("← weave rx \(value.count)B: \(value.prefix(48).hex)")
         do {
             switch try receiver.receive(value) {
             case .control:

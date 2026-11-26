@@ -11,7 +11,7 @@ extension Data {
         }
         self = out
     }
-    var hex: String { map { String(format: "%02x", $0) }.joined() }
+    public var hex: String { map { String(format: "%02x", $0) }.joined() }
 
     /// base64url with padding (matches Python base64.urlsafe_b64encode).
     var base64url: String {

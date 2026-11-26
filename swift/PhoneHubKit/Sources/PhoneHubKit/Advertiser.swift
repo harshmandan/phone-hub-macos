@@ -30,7 +30,7 @@ extension Advertiser: CBPeripheralManagerDelegate {
                   "(grant Bluetooth to the terminal)")
             return
         }
-        let service = CBMutableService(type: BleRadio.serviceUUID, primary: true)
+        let service = CBMutableService(type: BleRadio.gattServiceUUID, primary: true)
         let tx = CBMutableCharacteristic(type: BleRadio.txCharacteristicUUID,
                                          properties: [.notify], value: nil, permissions: [])
         let rx = CBMutableCharacteristic(type: BleRadio.rxCharacteristicUUID,
@@ -42,9 +42,9 @@ extension Advertiser: CBPeripheralManagerDelegate {
         // CoreBluetooth will honour the name + service UUID; service data is dropped.
         peripheral.startAdvertising([
             CBAdvertisementDataLocalNameKey: "eve",
-            CBAdvertisementDataServiceUUIDsKey: [BleRadio.serviceUUID],
+            CBAdvertisementDataServiceUUIDsKey: [BleRadio.gattServiceUUID],
         ])
-        print("advertising as a Chromebook (service \(BleRadio.serviceUUID.uuidString))…")
+        print("advertising as a Chromebook (service \(BleRadio.gattServiceUUID.uuidString))…")
         print("note: macOS drops service data, so no EID is in the advertisement.")
     }
 

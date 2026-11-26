@@ -35,6 +35,29 @@ do {
         NearbyAdvertiser(name: Host.current().localizedName ?? "Mac").run(seconds: secs)
     } else if args.count >= 2 && args[1] == "nettest" {
         print(NearbyTransport.loopbackTest() ? "loopback frame transport OK" : "loopback FAILED")
+    } else if args.count >= 2 && args[1] == "bleweave" {
+        // bleweave [seconds=120] [identity.json] — BLE central: scan the phone's
+        // FE50 EID, connect to the b3b7e28e weave GATT, run uWeave.
+        let secs = args.count >= 3 ? (Double(args[2]) ?? 120) : 120
+        let idPath = args.count >= 4 ? args[3] : "../../probe/phone_identity.json"
+        var seeds: [Eid.BeaconSeed] = []
+        if let data = FileManager.default.contents(atPath: idPath),
+           let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let arr = j["beaconSeeds"] as? [[String: Any]] {
+            for s in arr {
+                if let hex = s["dataHex"] as? String,
+                   let start = (s["startMs"] as? NSNumber)?.int64Value,
+                   let end = (s["endMs"] as? NSNumber)?.int64Value {
+                    seeds.append(Eid.BeaconSeed(data: Data(hex: hex), startTimeMs: start, endTimeMs: end))
+                }
+            }
+        }
+        if seeds.isEmpty { print("no phone beacon seeds at \(idPath)"); exit(1) }
+        let radio = BleRadio(remoteSeeds: seeds)
+        radio.onMessage = { print("  [ble] 🔓 channel message \($0.count)B: \($0.prefix(80).hex)") }
+        radio.start()
+        RunLoop.main.run(until: Date().addingTimeInterval(secs))
+        print("bleweave done")
     } else if args.count >= 3 && args[1] == "phonehub" {
         // phonehub <phone-mac> [rfcomm-channel=13] [seconds=60]
         let channel = args.count >= 4 ? (Int(args[3]) ?? 13) : 13
