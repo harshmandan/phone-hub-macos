@@ -36,6 +36,9 @@ enum JsonDriver {
                       "sizeKB": "\(p.sizeBytes / 1024)", "thumb": thumb])
             }
         }
+        client.onDownloaded = { key, path in
+            emit(["type": "downloaded", "key": key, "path": path])
+        }
         // stdin command loop (one command per line).
         Thread.detachNewThread {
             while let line = readLine(strippingNewline: true) {
@@ -51,6 +54,8 @@ enum JsonDriver {
                         if let id = Int64(parts[1]) { client.sendPhoneHub(PhoneHub.inlineReply(id: id, text: parts[2]), label: "reply") }
                     case "photos":
                         client.sendPhoneHub(PhoneHub.fetchCameraRollItems(max: 12), label: "photos")
+                    case "download" where parts.count >= 2:
+                        client.downloadPhoto(key: parts.dropFirst().joined(separator: " "))
                     default: break
                     }
                 }

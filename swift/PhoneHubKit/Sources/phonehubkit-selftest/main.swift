@@ -52,6 +52,26 @@ do {
         radio.onMessage = { print("  [ble] app payload \($0.count)B: \($0.prefix(80).hex)") }
         // Arming for Phone Hub: don't turn on the phone's hotspot (it drops Wi-Fi adb).
         if ProcessInfo.processInfo.environment["PHONEHUB_ARM_ONLY"] != nil { radio.autoConnectTether = false }
+        // json mode: emit EVENT lines (armed, tether availability + hotspot creds)
+        // and take a "tether" stdin command, so the menu-bar app can turn the
+        // phone's hotspot on and auto-join it.
+        if args.contains("json") {
+            radio.onAuthenticated = { JsonDriver.emit(["type": "armed"]) }
+            radio.onTether = { available, ssid, pw in
+                if let ssid, let pw {
+                    JsonDriver.emit(["type": "tether", "state": "ready", "ssid": ssid, "password": pw])
+                } else {
+                    JsonDriver.emit(["type": "tether", "state": available ? "available" : "unavailable"])
+                }
+            }
+            Thread.detachNewThread {
+                while let line = readLine(strippingNewline: true) {
+                    if line.trimmingCharacters(in: .whitespaces) == "tether" {
+                        DispatchQueue.main.async { radio.requestTether() }
+                    }
+                }
+            }
+        }
         radio.run(seconds: secs)
     } else if args.count >= 3 && args[1] == "phonehub" {
         // phonehub <phone-mac> [seconds=90] [identity.json] [action]
@@ -92,6 +112,8 @@ do {
         // json: machine-readable mode for the menu-bar app (overrides the handlers
         // above with EVENT-line output + a stdin command loop).
         if action == "json" { JsonDriver.attach(client, photoDir: PhoneHubClient.defaultPhotoDir) }
+        // Exit on a pre-Phone-Hub drop so the supervisor retries with a fresh process.
+        client.exitOnPrematureClose = true
         // The phone only arms its Nearby "secure_channel" listener while a Better
         // Together BLE weave channel is live, so run `bleweave` concurrently first
         // (scripts/phonehub.sh does this). RFCOMM channel is resolved via SDP.

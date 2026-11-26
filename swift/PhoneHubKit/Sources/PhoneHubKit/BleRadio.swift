@@ -68,6 +68,9 @@ public final class BleRadio: NSObject {
     /// request turns the phone's hotspot ON, which reconfigures Wi-Fi and drops
     /// Wi-Fi adb / any Wi-Fi link mid-session. Standalone tether demos leave it true.
     public var autoConnectTether = true
+    /// Called on Instant Tethering updates: available=whether the phone offers a
+    /// hotspot; once we request it, ssid/password carry the live credentials.
+    public var onTether: ((_ available: Bool, _ ssid: String?, _ password: String?) -> Void)?
     private var firedAuthenticated = false
 
     public init(remoteSeeds: [Eid.BeaconSeed],
@@ -135,6 +138,17 @@ public final class BleRadio: NSObject {
                     label: "CrosState (phone_hub, attestation-walled)")
         sendMessage(ctx.encode(Tether.makeAvailabilityRequest()), feature: Tether.feature,
                     label: "TetherAvailabilityRequest (magic_tether)")
+    }
+
+    /// Ask the phone to turn its hotspot ON and hand back Wi-Fi credentials — the
+    /// user-approved Instant Tethering action. Safe to call once the channel is up;
+    /// the result arrives via `onTether(available:ssid:password:)`.
+    public func requestTether() {
+        guard let ctx = context else { log("requestTether: not authenticated yet"); return }
+        guard !sentConnect else { return }
+        sentConnect = true
+        log("→ requesting hotspot (ConnectTetheringRequest) …")
+        sendMessage(ctx.encode(Tether.makeConnectRequest()), feature: Tether.feature, label: "ConnectTetheringRequest")
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -326,14 +340,15 @@ extension BleRadio: CBPeripheralDelegate {
                 // When the phone says tethering is available, ask it to start the
                 // hotspot and hand back Wi-Fi credentials (user-approved action —
                 // this turns the phone's hotspot on).
-                if autoConnectTether, t.type == Tether.availabilityResponse, t.available, !sentConnect, let ctx = context {
-                    sentConnect = true
-                    log("→ requesting hotspot (ConnectTetheringRequest) …")
-                    sendMessage(ctx.encode(Tether.makeConnectRequest()), feature: Tether.feature,
-                                label: "ConnectTetheringRequest")
+                if t.type == Tether.availabilityResponse {
+                    onTether?(t.available, nil, nil)
+                    if autoConnectTether, t.available, !sentConnect {
+                        requestTether()
+                    }
                 }
                 if t.type == Tether.connectResponse, let ssid = t.ssid, let pw = t.password {
                     log("🛜  HOTSPOT READY  →  SSID: \(ssid)   PASSWORD: \(pw)")
+                    onTether?(true, ssid, pw)
                 }
             } else if feature == PhoneHub.feature {
                 log("📱 \(PhoneHub.describe(payload))")

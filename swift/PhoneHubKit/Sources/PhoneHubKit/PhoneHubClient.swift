@@ -75,9 +75,15 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
     public var onSnapshot: ((PhoneHub.Snapshot) -> Void)?
     /// Called with the phone's recent camera-roll items (metadata + thumbnails).
     public var onPhotos: (([PhoneHub.Photo]) -> Void)?
+    /// Called when a full-resolution camera-roll file finishes downloading, with
+    /// its key and the local path it was written to.
+    public var onDownloaded: ((_ key: String, _ path: String) -> Void)?
     /// When true, enable camera_roll in CrosState and fetch recent photos after the
     /// first status snapshot; thumbnails are written to `photoDir`.
     public var fetchPhotos = false
+    /// When true, the process exits (code 2) if the channel closes before Phone Hub
+    /// is reached, so a supervisor can retry with a fresh process. Set by the CLI.
+    public var exitOnPrematureClose = false
     /// When true (implies fetchPhotos), also download the full-resolution files.
     public var downloadPhotos = false
     /// Where thumbnails and downloaded files are written. Defaults to a per-user,
@@ -278,7 +284,20 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
     private func receiveLoop() {
         fc?.receiveFrame { [weak self] data in
             guard let self else { return }
-            guard let data else { self.log("connection closed"); self.teardown(); return }
+            guard let data else {
+                self.log("connection closed")
+                let gotData = self.gotPhoneHub
+                self.teardown()
+                // The phone sometimes drops the RFCOMM right after our ClientInit (an
+                // intermittent post-open disconnect). If we never reached Phone Hub,
+                // exit so the supervisor (app engine / phonehub.sh) retries with a
+                // fresh process — the UKEY2/D2D state can't be reused in-process.
+                if !gotData && self.exitOnPrematureClose {
+                    self.log("dropped before Phone Hub — exiting for a clean retry")
+                    exit(2)
+                }
+                return
+            }
             do { try self.process(data) } catch { self.log("error: \(error)") }
             self.receiveLoop()
         }
@@ -450,8 +469,18 @@ public final class PhoneHubClient: NSObject, IOBluetoothRFCOMMChannelDelegate {
         ensurePhotoDir()
         let name = p.fileName.isEmpty ? "photo-\(abs(p.key.hashValue))" : p.fileName.replacingOccurrences(of: "/", with: "_")
         let path = "\(photoDir)/\(name)"
-        do { try writeSecure(data, to: path); log("   ✅ downloaded \(data.count / 1024)KB → \(path)") }
-        catch { log("   full-photo save failed: \(error)") }
+        do {
+            try writeSecure(data, to: path)
+            log("   ✅ downloaded \(data.count / 1024)KB → \(path)")
+            onDownloaded?(p.key, path)
+        } catch { log("   full-photo save failed: \(error)") }
+    }
+
+    /// Download the full-resolution file for one camera-roll item on demand (the
+    /// thumbnail list must have arrived first so we know its metadata).
+    public func downloadPhoto(key: String) {
+        guard let photo = photoByKey[key] else { log("downloadPhoto: unknown key \(key)"); return }
+        sendPhoneHub(PhoneHub.fetchCameraRollItemData(photo), label: "FetchItemData \(photo.fileName)")
     }
 
     /// Send a Phone Hub request (e.g. PhoneHub.dismissNotification / inlineReply /
