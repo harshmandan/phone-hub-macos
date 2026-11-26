@@ -19,9 +19,25 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @EnvironmentObject var engine: PhoneHubEngine
+    @Environment(\.openWindow) private var openWindow
+    @State private var importMsg = ""
+    @State private var importOK = true
 
     var body: some View {
         Form {
+            Section("Connection") {
+                Text("Reuse the connection you already set up with the CLI — no need to enroll again. This copies the identity + keys into the app.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button { importConnection() } label: { Label("Import from CLI setup…", systemImage: "square.and.arrow.down.on.square") }
+                    if FileManager.default.fileExists(atPath: ConfigStore.probeIdentityPath) {
+                        Button("Use repo probe") { runImport(URL(fileURLWithPath: ConfigStore.probeIdentityPath)) }
+                    }
+                }
+                if !importMsg.isEmpty {
+                    Text(importMsg).font(.caption).foregroundStyle(importOK ? Palette.good : .red)
+                }
+            }
             Section("Phone") {
                 TextField("Name", text: $engine.config.phoneName)
                 TextField("Bluetooth MAC", text: $engine.config.phoneBtMac)
@@ -37,9 +53,20 @@ private struct GeneralSettings: View {
                 Toggle("Show notifications", isOn: $engine.config.showNotifications)
             }
             Section("Account") {
-                TextField("Google account", text: $engine.config.account)
-                Text("Used only to label this setup; enrollment is done by the probe tools.")
-                    .font(.caption).foregroundStyle(.secondary)
+                if engine.config.account.isEmpty && !ConfigStore.hasMasterToken {
+                    Button { openWindow(id: "signin") } label: {
+                        Label("Sign in with Google…", systemImage: "person.badge.key")
+                    }
+                    Text("Opens a Google sign-in window. We read the sign-in token Google returns — never your password.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    HStack {
+                        Image(systemName: "checkmark.seal.fill").foregroundStyle(Palette.good)
+                        Text(engine.config.account.isEmpty ? "Signed in" : engine.config.account)
+                        Spacer()
+                        Button("Sign in again") { openWindow(id: "signin") }
+                    }
+                }
             }
         }
         .formStyle(.grouped)
@@ -50,6 +77,24 @@ private struct GeneralSettings: View {
         panel.allowedContentTypes = [.json]
         panel.canChooseFiles = true
         if panel.runModal() == .OK, let url = panel.url { engine.config.identityPath = url.path }
+    }
+
+    private func importConnection() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.message = "Pick the CLI's phone_identity.json (device_keys.json must sit next to it)."
+        if panel.runModal() == .OK, let url = panel.url { runImport(url) }
+    }
+
+    private func runImport(_ url: URL) {
+        do {
+            engine.config = try ConfigStore.importSetup(from: url)
+            importOK = true
+            importMsg = "Imported \(engine.config.phoneName) (\(engine.config.phoneBtMac)). Ready to connect."
+        } catch {
+            importOK = false
+            importMsg = error.localizedDescription
+        }
     }
 }
 

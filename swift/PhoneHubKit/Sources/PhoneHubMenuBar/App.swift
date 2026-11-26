@@ -14,8 +14,13 @@ struct PhoneHubApp: App {
 
         Settings {
             SettingsView().environmentObject(engine)
-                .frame(width: 520, height: 460)
+                .frame(width: 520, height: 480)
         }
+
+        Window("Sign in to Google", id: "signin") {
+            SignInView().environmentObject(engine)
+        }
+        .windowResizability(.contentSize)
     }
 
     private var menuIcon: String {
