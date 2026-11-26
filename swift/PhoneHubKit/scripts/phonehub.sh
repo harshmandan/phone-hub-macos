@@ -10,7 +10,7 @@
 #   action: photos | ring | dismiss | reply:<text>  (acted on the first snapshot)
 #     photos  — fetch recent camera-roll items; thumbnails saved (owner-only) to
 #               ~/Library/Application Support/PhoneHub/photos
-# Example: phonehub.sh 00:00:00:00:00:00 90 reply:on my way
+# Example: phonehub.sh AA:BB:CC:DD:EE:FF 90 reply:on my way   (phone's Bluetooth MAC)
 set -e
 cd "$(dirname "$0")/.."
 PLIST="$PWD/Info.plist"

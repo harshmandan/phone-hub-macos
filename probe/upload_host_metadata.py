@@ -25,7 +25,7 @@ import securemessage as sm
 from device_sync import SYNC_METADATA, BETTER_TOGETHER_GROUP
 from probe_common import cryptauth_token, load_keys, post
 
-MAC_BT_ADDRESS = "AA:BB:CC:DD:EE:FF"
+MAC_BT_ADDRESS = os.environ.get("MAC_BT_ADDRESS", "AA:BB:CC:DD:EE:FF")  # set to your Mac's Bluetooth MAC
 SEED_WINDOW_MS = 14 * 24 * 60 * 60 * 1000  # 14 days, matching the phone's seeds
 NUM_SEEDS = 4
 

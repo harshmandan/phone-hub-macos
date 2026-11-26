@@ -32,7 +32,7 @@ enum ConfigStore {
             let idj = (try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: probeIdentityPath)))) as? [String: Any] ?? [:]
             let p = PhoneSetup(name: (idj["name"] as? String) ?? "Pixel 9",
                                btMac: (idj["btMac"] as? String) ?? "00:00:00:00:00:00",
-                               account: "you@example.com",
+                               account: (idj["account"] as? String) ?? "you@example.com",
                                identityPath: probeIdentityPath)
             c.phones = [p]; c.activePhoneId = p.id
         }

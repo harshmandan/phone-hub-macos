@@ -4,7 +4,7 @@
 cd "$(dirname "$0")/.."
 BIN=.build/release/phonehubkit-selftest
 ID=/Users/harsh/Developer/phone-hub-macos/probe/phone_identity.json
-MAC="${1:-00:00:00:00:00:00}"
+MAC="${1:-AA:BB:CC:DD:EE:FF}"
 "$BIN" bleweave 120 "$ID" > /tmp/arm.log 2>&1 &
 ARM=$!
 trap 'kill $ARM 2>/dev/null' EXIT

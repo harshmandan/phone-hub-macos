@@ -27,7 +27,7 @@ import securemessage as sm
 from device_sync import post, SYNC_METADATA, BETTER_TOGETHER_GROUP
 from probe_auth import ANDROID_ID, GMS_PACKAGE, GMS_SIG, CRYPTAUTH_SCOPE
 
-MAC_BT_ADDRESS = "AA:BB:CC:DD:EE:FF"
+MAC_BT_ADDRESS = os.environ.get("MAC_BT_ADDRESS", "AA:BB:CC:DD:EE:FF")  # set to your Mac's Bluetooth MAC
 
 
 def metadata(ks: dict, bt_address: str) -> bytes:
