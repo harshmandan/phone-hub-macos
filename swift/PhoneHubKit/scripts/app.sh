@@ -45,9 +45,21 @@ cat > "$APP/Contents/Info.plist" <<'PLISTEOF'
 PLISTEOF
 
 echo "bundled: $APP"
-# Ad-hoc sign the bundle (and the embedded CLI) so CoreBluetooth has a signed
-# identity and the Bluetooth permission is tracked consistently.
-echo "signing (ad-hoc)…"
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "  (codesign failed — continuing unsigned)"
+# Sign with a STABLE self-signed identity so the macOS Bluetooth permission (TCC,
+# keyed to the code signature) persists across rebuilds. Ad-hoc signing changes
+# the hash every build, which makes macOS re-prompt. Falls back to ad-hoc if the
+# identity isn't installed. Create it once:
+#   openssl req -x509 -newkey rsa:2048 -keyout k.pem -out c.pem -nodes -days 3650 \
+#     -subj /CN="PhoneHub Dev Signing" -addext extendedKeyUsage=codeSigning
+#   openssl pkcs12 -export -out p.p12 -inkey k.pem -in c.pem \
+#     -name "PhoneHub Dev Signing" -passout pass:x -legacy
+#   security import p.p12 -P x -A -T /usr/bin/codesign
+SIGN_ID="PhoneHub Dev Signing"
+if codesign --force --deep --sign "$SIGN_ID" "$APP" 2>/dev/null; then
+  echo "signing: stable identity ($SIGN_ID) — Bluetooth permission persists"
+else
+  echo "signing: ad-hoc ($SIGN_ID not found — permission will re-prompt each build)"
+  codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || echo "  (codesign failed — continuing unsigned)"
+fi
 echo "launching…"
 open "$APP"
