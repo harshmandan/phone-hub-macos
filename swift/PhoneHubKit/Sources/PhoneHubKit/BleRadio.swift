@@ -50,6 +50,7 @@ public final class BleRadio: NSObject {
     // arrives — this is what ChromeOS's CrosStateSender does.
     private var crosStateTimer: Timer?
     private var gotPhoneHub = false
+    private var gotTether = false
 
     /// Called with each fully-reassembled secure-channel message.
     public var onMessage: ((Data) -> Void)?
@@ -113,10 +114,12 @@ public final class BleRadio: NSObject {
         packets.forEach(enqueue)
     }
 
-    private func sendCrosState() {
+    private func requestFeatures() {
         guard let ctx = context else { return }
         sendMessage(ctx.encode(PhoneHub.crosState()), feature: PhoneHub.feature,
-                    label: "CrosState → request PhoneStatusSnapshot")
+                    label: "CrosState (phone_hub, attestation-walled)")
+        sendMessage(ctx.encode(Tether.availabilityRequest_()), feature: Tether.feature,
+                    label: "TetherAvailabilityRequest (magic_tether)")
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -243,12 +246,13 @@ extension BleRadio: CBPeripheralDelegate {
                 context = handshake.context
                 sendMessage(auth, feature: WireMessage.authFeature, label: "[Initiator Auth]")
                 log("🔑 D2D secure channel established")
-                // Kick off Phone Hub and retry until the phone answers.
-                sendCrosState()
+                // Request features and retry until one answers. Phone Hub is
+                // attestation-walled; Instant Tethering (magic_tether) is not.
+                requestFeatures()
                 crosStateTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] t in
                     guard let self else { t.invalidate(); return }
-                    if self.gotPhoneHub { t.invalidate(); return }
-                    self.sendCrosState()
+                    if self.gotTether { t.invalidate(); return }
+                    self.requestFeatures()
                 }
             } catch {
                 log("D2D auth failed: \(error)")
@@ -258,9 +262,12 @@ extension BleRadio: CBPeripheralDelegate {
         // Secure channel is up: decrypt the feature message.
         do {
             let payload = try context!.decode(message)
-            if feature == PhoneHub.feature {
-                gotPhoneHub = true
+            if feature == Tether.feature {
+                gotTether = true
                 crosStateTimer?.invalidate()
+                log("📡 \(Tether.describe(payload))")
+            } else if feature == PhoneHub.feature {
+                gotPhoneHub = true
                 log("📱 \(PhoneHub.describe(payload))")
             } else {
                 log("🔓 [\(feature)] \(payload.count)B: \(payload.prefix(64).hex)")
