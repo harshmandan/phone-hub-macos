@@ -44,6 +44,12 @@ public final class BleRadio: NSObject {
     private var context: D2D.SecureContext?
     private var writeQueue: [Data] = []
     private var writing = false
+    // Phone Hub: the phone registers its message processor shortly AFTER the
+    // channel authenticates, so a single CrosState can race it ("no
+    // messageProcessor registered"). Retry on a timer until a phone_hub reply
+    // arrives — this is what ChromeOS's CrosStateSender does.
+    private var crosStateTimer: Timer?
+    private var gotPhoneHub = false
 
     /// Called with each fully-reassembled secure-channel message.
     public var onMessage: ((Data) -> Void)?
@@ -105,6 +111,12 @@ public final class BleRadio: NSObject {
         let packets = generator.encodeDataMessage(wire)
         log("→ \(label) (\(message.count)B → wire \(wire.count)B → \(packets.count) packets)")
         packets.forEach(enqueue)
+    }
+
+    private func sendCrosState() {
+        guard let ctx = context else { return }
+        sendMessage(ctx.encode(PhoneHub.crosState()), feature: PhoneHub.feature,
+                    label: "CrosState → request PhoneStatusSnapshot")
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -217,8 +229,9 @@ extension BleRadio: CBPeripheralDelegate {
     }
 
     private func handleChannelMessage(_ wire: Data) {
-        // Incoming messages are WireMessage-framed; unwrap to the SecureMessage.
-        guard let message = WireMessage.payload(wire) else {
+        // Incoming messages are WireMessage-framed; unwrap to the SecureMessage
+        // and the feature it belongs to.
+        guard let (message, feature) = WireMessage.parse(wire) else {
             log("← non-WireMessage frame (\(wire.count)B): \(wire.prefix(32).hex)")
             return
         }
@@ -229,19 +242,32 @@ extension BleRadio: CBPeripheralDelegate {
                 let auth = try handshake.initiatorAuth(forResponderAuth: message)
                 context = handshake.context
                 sendMessage(auth, feature: WireMessage.authFeature, label: "[Initiator Auth]")
-                log("🔑 D2D secure channel established — awaiting Phone Hub messages")
+                log("🔑 D2D secure channel established")
+                // Kick off Phone Hub and retry until the phone answers.
+                sendCrosState()
+                crosStateTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] t in
+                    guard let self else { t.invalidate(); return }
+                    if self.gotPhoneHub { t.invalidate(); return }
+                    self.sendCrosState()
+                }
             } catch {
                 log("D2D auth failed: \(error)")
             }
             return
         }
-        // Secure channel is up: decrypt feature messages.
+        // Secure channel is up: decrypt the feature message.
         do {
             let payload = try context!.decode(message)
-            log("🔓 feature message \(payload.count)B: \(payload.prefix(80).hex)")
+            if feature == PhoneHub.feature {
+                gotPhoneHub = true
+                crosStateTimer?.invalidate()
+                log("📱 \(PhoneHub.describe(payload))")
+            } else {
+                log("🔓 [\(feature)] \(payload.count)B: \(payload.prefix(64).hex)")
+            }
             onMessage?(payload)
         } catch {
-            log("decode failed (\(message.count)B): \(error)")
+            log("decode failed [\(feature)] (\(message.count)B): \(error)")
         }
     }
 }

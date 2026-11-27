@@ -22,15 +22,16 @@ enum WireMessage {
         return out
     }
 
-    /// Extract the inner payload bytes from a received WireMessage (ignores the
-    /// feature for now). Returns nil if the framing isn't version 3.
-    static func payload(_ data: Data) -> Data? {
+    /// Extract the inner payload bytes and the feature from a received
+    /// WireMessage. Returns nil if the framing isn't version 3.
+    static func parse(_ data: Data) -> (payload: Data, feature: String)? {
         guard data.count > 3, data[data.startIndex] == versionThree else { return nil }
         let body = Data(data.dropFirst(3))
         guard let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
               let b64 = obj["payload"] as? String else { return nil }
         var s = b64.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         while s.count % 4 != 0 { s += "=" }
-        return Data(base64Encoded: s)
+        guard let payload = Data(base64Encoded: s) else { return nil }
+        return (payload, (obj["feature"] as? String) ?? "")
     }
 }
