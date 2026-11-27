@@ -48,14 +48,21 @@ public enum Tether {
         return "battery=\(batt) carrier=\(carrier) signal=\(bars)"
     }
 
-    /// Human-readable summary of a received magic_tether message.
-    public static func describe(_ payload: Data) -> String {
+    public struct Parsed {
+        public let type: Int
+        public let summary: String
+        public let available: Bool           // availability response: TETHER_AVAILABLE / SETUP_NEEDED
+        public let ssid: String?             // connect response
+        public let password: String?
+    }
+
+    /// Parse a received magic_tether message into a structured result + summary.
+    public static func parse(_ payload: Data) -> Parsed {
         guard let obj = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let type = obj["type"] as? Int else {
-            return "tether non-JSON \(payload.count)B: \(String(data: payload.prefix(80), encoding: .utf8) ?? payload.prefix(40).hex)"
+            return Parsed(type: -1, summary: "tether non-JSON \(payload.count)B", available: false, ssid: nil, password: nil)
         }
-        let proto = b64urlDecode((obj["data"] as? String) ?? "")
-        let f = Pb.readFields(proto)
+        let f = Pb.readFields(b64urlDecode((obj["data"] as? String) ?? ""))
         switch type {
         case availabilityResponse:
             let codes = ["UNKNOWN_ERROR", "TETHER_AVAILABLE", "SETUP_NEEDED", "NO_RECEPTION",
@@ -63,16 +70,22 @@ public enum Tether {
             let rc = Int(f.varint(1) ?? 0)
             let name = rc < codes.count ? codes[rc] : "\(rc)"
             let status = f.bytes(2).map { " — " + deviceStatus($0) } ?? ""
-            return "TETHER_AVAILABILITY_RESPONSE: \(name)\(status)"
+            return Parsed(type: type, summary: "TETHER_AVAILABILITY_RESPONSE: \(name)\(status)",
+                          available: rc == 1 || rc == 2, ssid: nil, password: nil)
         case connectResponse:
             let rc = Int(f.varint(1) ?? 0)
-            let ssid = f.bytes(2).flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            let pw = f.bytes(3).flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            return "CONNECT_TETHERING_RESPONSE: code=\(rc) SSID=\(ssid) password=\(pw)"
+            let ssid = f.bytes(2).flatMap { String(data: $0, encoding: .utf8) }
+            let pw = f.bytes(3).flatMap { String(data: $0, encoding: .utf8) }
+            let codes = ["UNKNOWN_ERROR", "SUCCESS", "PROVISIONING_FAILED", "TETHERING_TIMEOUT",
+                         "TETHERING_UNSUPPORTED", "NO_CELL_DATA", "ENABLING_HOTSPOT_FAILED", "ENABLING_HOTSPOT_TIMEOUT"]
+            let name = rc < codes.count ? codes[rc] : "\(rc)"
+            return Parsed(type: type, summary: "CONNECT_TETHERING_RESPONSE: \(name) SSID=\(ssid ?? "-") password=\(pw ?? "-")",
+                          available: false, ssid: ssid, password: pw)
         case keepAliveResponse:
-            return "KEEP_ALIVE_TICKLE_RESPONSE" + (f.bytes(1).map { " — " + deviceStatus($0) } ?? "")
+            return Parsed(type: type, summary: "KEEP_ALIVE_TICKLE_RESPONSE" + (f.bytes(1).map { " — " + deviceStatus($0) } ?? ""),
+                          available: false, ssid: nil, password: nil)
         default:
-            return "magic_tether type \(type), \(proto.count)B"
+            return Parsed(type: type, summary: "magic_tether type \(type)", available: false, ssid: nil, password: nil)
         }
     }
 }

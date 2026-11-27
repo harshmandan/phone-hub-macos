@@ -51,6 +51,7 @@ public final class BleRadio: NSObject {
     private var crosStateTimer: Timer?
     private var gotPhoneHub = false
     private var gotTether = false
+    private var sentConnect = false
 
     /// Called with each fully-reassembled secure-channel message.
     public var onMessage: ((Data) -> Void)?
@@ -265,7 +266,20 @@ extension BleRadio: CBPeripheralDelegate {
             if feature == Tether.feature {
                 gotTether = true
                 crosStateTimer?.invalidate()
-                log("📡 \(Tether.describe(payload))")
+                let t = Tether.parse(payload)
+                log("📡 \(t.summary)")
+                // When the phone says tethering is available, ask it to start the
+                // hotspot and hand back Wi-Fi credentials (user-approved action —
+                // this turns the phone's hotspot on).
+                if t.type == Tether.availabilityResponse, t.available, !sentConnect, let ctx = context {
+                    sentConnect = true
+                    log("→ requesting hotspot (ConnectTetheringRequest) …")
+                    sendMessage(ctx.encode(Tether.connectRequest_()), feature: Tether.feature,
+                                label: "ConnectTetheringRequest")
+                }
+                if t.type == Tether.connectResponse, let ssid = t.ssid, let pw = t.password {
+                    log("🛜  HOTSPOT READY  →  SSID: \(ssid)   PASSWORD: \(pw)")
+                }
             } else if feature == PhoneHub.feature {
                 gotPhoneHub = true
                 log("📱 \(PhoneHub.describe(payload))")
