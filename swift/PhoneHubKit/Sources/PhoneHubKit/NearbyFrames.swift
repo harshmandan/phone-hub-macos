@@ -3,6 +3,11 @@ import Foundation
 /// Nearby Connections OfflineFrames — the connection protocol on top of the
 /// UKEY2-secured channel. Ports the key frames from offline_wire_formats.proto.
 ///
+/// Source (offline_wire_formats.proto — OfflineFrame, ConnectionRequest/Response,
+/// PayloadTransferFrame, KeepAlive):
+///   https://github.com/google/nearby/blob/main/connections/implementation/proto/offline_wire_formats.proto
+///   (cross-checked against grishka/NearDrop's copy: https://github.com/grishka/NearDrop )
+///
 /// Frames travel over the medium socket length-prefixed (4-byte big-endian).
 /// After UKEY2, the channel is AES-256-CBC+HMAC (our SecureContext). App data
 /// (the Quick Start messages) rides inside PayloadTransferFrame BYTES payloads.

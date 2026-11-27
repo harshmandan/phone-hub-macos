@@ -3,6 +3,11 @@ import CryptoKit
 
 /// CryptAuth v2 enrollment: register the Mac as a CHROME device and enroll its
 /// key bundles. Port of `metadata.py` + `enroll_keys.py` + `probe_enroll.py`.
+///
+/// API: cryptauthenrollment.googleapis.com (v1:syncKeys / v1:enrollKeys).
+/// Reference (ChromeOS client of the same service):
+///   https://chromium.googlesource.com/chromium/src/+/main/chromeos/ash/services/device_sync/cryptauth_v2_enroller_impl.cc
+///   https://chromium.googlesource.com/chromium/src/+/main/chromeos/ash/services/device_sync/proto/
 public enum Enrollment {
     static let apiKey = "AIzaSyAP-gfH3qvi6vgHZbSYwQ_XHqV_mXHhzIk"
     static let androidCert = "58E1C4133F7441EC3D2C270270A14802DA47BA0E"

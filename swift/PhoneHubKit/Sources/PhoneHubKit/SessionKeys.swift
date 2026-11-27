@@ -1,8 +1,13 @@
 import Foundation
 import CryptoKit
 
-/// Per-direction channel keys from the handshake root key.
+/// Per-direction channel keys from the handshake root key (Nearby/UKEY2 path).
 /// Port of `ble/session_keys.py`.
+///
+/// Source (securegcm key derivation / HKDF salts, "SecureMessage"):
+///   https://github.com/google/ukey2/blob/master/src/main/java/com/google/security/cryptauth/lib/securegcm/D2DConnectionContext.java
+/// (The Better Together D2D-auth directional keys — salt SHA256("D2D") — are in
+///  DeviceToDevice.swift instead; this file is the Nearby Connections variant.)
 struct SessionKeys {
     static let salt = Data([
         0x82, 0xAA, 0x55, 0xA0, 0xD3, 0x97, 0xF8, 0x83, 0x46, 0xCA, 0x1C,

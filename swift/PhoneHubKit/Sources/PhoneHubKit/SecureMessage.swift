@@ -4,6 +4,12 @@ import CommonCrypto
 
 /// Google securemessage: AES-256-CBC + HMAC-SHA256, master key from ECDH→SHA256.
 /// Swift port of the probe's `securemessage.py`, verified against it.
+///
+/// Source (proto + field numbers, SigScheme/EncScheme enums):
+///   https://chromium.googlesource.com/chromium/src/+/a753229/components/cryptauth/proto/securemessage.proto
+/// The HKDF "ENC:2"/"SIG:1" key derivation and the signed+encrypted layout come
+/// from SecureMessageDelegate (CryptoOps):
+///   https://chromium.googlesource.com/chromium/src/+/a753229/components/cryptauth/
 enum SecureMessage {
     static let sigHmacSha256: UInt64 = 1
     static let encNone: UInt64 = 1

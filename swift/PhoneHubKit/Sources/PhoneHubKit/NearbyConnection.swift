@@ -5,6 +5,10 @@ import CryptoKit
 /// phone connects). Drives: ConnectionRequest → UKEY2 (ClientInit/ServerInit/
 /// ClientFinished) → ConnectionResponse → encrypted D2D channel → frames.
 ///
+/// Ported from grishka/NearDrop's InboundNearbyConnection:
+///   https://github.com/grishka/NearDrop/blob/master/NearbyShare/InboundNearbyConnection.swift
+/// Protocol: https://github.com/google/nearby (connections/implementation).
+///
 /// Reuses the tested pieces: Ukey2.Server, SecureContext (keyed with the Nearby
 /// d2dServer/d2dClient keys), NearbyFrames. Ported from NearDrop's
 /// InboundNearbyConnection. Logs every step so a live run shows how far it gets.

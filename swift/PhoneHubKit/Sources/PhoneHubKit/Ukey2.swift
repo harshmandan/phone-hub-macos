@@ -7,6 +7,10 @@ import CryptoKit
 /// handshake consumes).
 ///
 /// P256_SHA512 cipher: NIST P-256 ECDH, SHA-512 commitments, SHA-256 KDF base.
+///
+/// Source: https://github.com/google/ukey2 (src/main/proto/device_to_device_messages.proto,
+///   securemessage/proto/securemessage.proto) and Chromium's port:
+///   https://chromium.googlesource.com/chromium/src/+/main/components/cryptauth/ (ukey2 handshake).
 public enum Ukey2 {
     // Ukey2Message.Type
     static let typeClientInit: UInt64 = 2

@@ -3,17 +3,18 @@ import CoreBluetooth
 import CryptoKit
 
 /// The CoreBluetooth radio: the Mac acts as BLE central, finds the phone by its
-/// rotating EID, connects, and runs uWeave over the TX/RX characteristics.
+/// rotating EID, connects, runs uWeave, then the D2D SecureChannel auth, then
+/// decodes feature messages. VERIFIED LIVE against a Pixel 9 (the full chain —
+/// FE50 scan → b3b7e28e GATT → uWeave → D2D auth → feature messages — works).
 ///
-/// SCAFFOLD. The discovery → connect → weave framing is wired to the tested
-/// `Eid` and `Weave` code. The parts marked `PHONE-GATED` (the authenticator
-/// handshake and each feature) need a phone on the account to build against and
-/// cannot be exercised here. Nothing in this file is verified yet — unlike the
-/// rest of PhoneHubKit, it has no tests because it needs hardware.
-///
-/// GATT UUIDs from chromeos/ash/services/secure_channel (ble_weave_client_
-/// connection.cc). The advertising service UUID is marked to confirm against a
-/// real phone — the source file would not fetch cleanly.
+/// Sources:
+///   GATT service + weave characteristic UUIDs (ble_constants.h /
+///   ble_weave_client_connection.cc). NOTE: this GMS build exposes the
+///   PRE-migration characteristic UUIDs (…0101/…0102), not the current ones:
+///     https://chromium.googlesource.com/chromium/src/+/a753229/components/proximity_auth/ble/bluetooth_low_energy_weave_client_connection.cc
+///     https://chromium.googlesource.com/chromium/src/+/main/chromeos/ash/services/secure_channel/ble_constants.h
+///   The scan→connect→authenticate→feature flow mirrors secure_channel's
+///   BleConnectionManager + DeviceToDeviceAuthenticator (see DeviceToDevice.swift).
 public final class BleRadio: NSObject {
     // The phone advertises its presence EID as service DATA under FE50; the
     // actual uWeave GATT service is a SEPARATE UUID (b3b7e28e), with the

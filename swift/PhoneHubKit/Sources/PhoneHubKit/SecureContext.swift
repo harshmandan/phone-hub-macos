@@ -1,7 +1,12 @@
 import Foundation
 
-/// The device-to-device encrypted channel after authentication.
-/// Port of `ble/secure_context.py`.
+/// The device-to-device encrypted channel after authentication (Nearby/UKEY2
+/// path, used by Quick Start). Port of `ble/secure_context.py`.
+///
+/// Source (securegcm D2DConnectionContext — encode/decode, GcmMetadata,
+/// sequence numbers):
+///   https://github.com/google/ukey2/blob/master/src/main/java/com/google/security/cryptauth/lib/securegcm/D2DConnectionContext.java
+///   proto: https://github.com/google/ukey2/blob/master/securegcm/src/main/proto/securegcm.proto
 final class SecureContext {
     static let gcmMetadataVersion: UInt64 = 1
     static let typeDeviceToDeviceMessage: UInt64 = 13  // securegcm.Type

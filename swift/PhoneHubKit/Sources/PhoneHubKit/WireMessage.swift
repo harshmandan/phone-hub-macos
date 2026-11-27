@@ -6,6 +6,10 @@ import Foundation
 /// where body = JSON {"payload": base64url(inner), "feature": "<feature>"}.
 /// (Confirmed live: sending a raw SecureMessage made the phone log
 /// "unsupported version: 10" — it read the proto's 0x0a tag as the version.)
+///
+/// Source (kMessageFormatVersionThree, Serialize/Deserialize, JSON keys):
+///   https://chromium.googlesource.com/chromium/src/+/a753229/components/cryptauth/wire_message.cc
+/// (Later moved to chromeos/ash/services/secure_channel/wire_message.cc, identical.)
 enum WireMessage {
     static let authFeature = "auth"
     static let versionThree: UInt8 = 3

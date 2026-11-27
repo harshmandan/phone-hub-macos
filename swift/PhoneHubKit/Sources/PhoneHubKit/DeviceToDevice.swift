@@ -2,8 +2,18 @@ import Foundation
 import CryptoKit
 
 /// The Better Together SecureChannel "DeviceToDevice" (D2D) authentication
-/// handshake, run over the uWeave channel after it connects. Port of Chromium
-/// components/cryptauth/device_to_device_* (copies in the scratchpad).
+/// handshake, run over the uWeave channel after it connects.
+///
+/// Sources (Chromium components/cryptauth, rev a753229):
+///   [Initiator Hello] / [Initiator Auth] / ResponderAuth validation:
+///     https://chromium.googlesource.com/chromium/src/+/a753229/components/cryptauth/device_to_device_initiator_helper.cc
+///   [Responder Auth] build (the 3 nested layers):
+///     https://chromium.googlesource.com/chromium/src/+/a753229/components/cryptauth/device_to_device_responder_operations.cc
+///   Session-key HKDF (salt = SHA256("D2D"), "initiator"/"responder"):
+///     https://chromium.googlesource.com/chromium/src/+/a753229/components/cryptauth/session_keys.cc
+///   Post-auth SecureContext (seq numbers, GcmMetadata DEVICE_TO_DEVICE_MESSAGE):
+///     https://chromium.googlesource.com/chromium/src/+/a753229/components/cryptauth/device_to_device_secure_context.cc
+/// GcmMetadata type enum values (12/13/15) are securegcm.Type in cryptauth_api.proto.
 ///
 /// Keys: PSK = SHA256(ECDH(our long-term device key, phone long-term key)) — a
 /// pre-shared key both sides already have. A fresh ephemeral P256 keypair per

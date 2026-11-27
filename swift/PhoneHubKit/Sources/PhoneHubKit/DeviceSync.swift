@@ -2,6 +2,10 @@ import Foundation
 import CryptoKit
 
 /// DeviceSync: join the account's Better Together device group and read it back.
+/// API: cryptauthdevicesync.googleapis.com (v1:syncMetadata, batchSetFeatureStatuses).
+/// Reference (ChromeOS client + proto):
+///   https://chromium.googlesource.com/chromium/src/+/main/chromeos/ash/services/device_sync/cryptauth_device_syncer_impl.cc
+///   https://chromium.googlesource.com/chromium/src/+/main/chromeos/ash/services/device_sync/proto/cryptauth_better_together_device_metadata.proto
 /// Port of `group_metadata.py` + `device_sync.py`. Reuses the Swift
 /// SecureMessage for the ECIES group-metadata encryption.
 public enum DeviceSync {

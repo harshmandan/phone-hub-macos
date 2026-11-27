@@ -23,9 +23,9 @@ public enum NearbyBt {
 
     /// Nearby derives the Bluetooth-Classic SDP service UUID from the service id
     /// as a name-based (type-3) UUID: MD5(service_id) with the version nibble set
-    /// to 3 and the RFC-4122 variant bits set. Confirmed against google/nearby
-    /// `internal/platform/uuid.cc` (`Uuid(absl::string_view)`) and
-    /// `bluetooth_classic.cc` (`GenerateUuidFromString(service_id)`).
+    /// to 3 and the RFC-4122 variant bits set. Confirmed against google/nearby:
+    ///   https://github.com/google/nearby/blob/main/internal/platform/uuid.cc  (Uuid(absl::string_view))
+    ///   https://github.com/google/nearby/blob/main/connections/implementation/mediums/bluetooth/bluetooth_classic.cc  (GenerateUuidFromString, ListenForService/ConnectToService)
     /// For NC_ID this computes `5e164731-1999-3405-9061-08a610fd3787`.
     public static func serviceUuidBytes(_ id: String = serviceId) -> [UInt8] {
         var b = [UInt8](Insecure.MD5.hash(data: Data(id.utf8)))

@@ -2,6 +2,10 @@ import Foundation
 import CryptoKit
 
 /// BLE ephemeral IDs for Better Together discovery. Port of `ble/eid.py`.
+///
+/// Source (EID = SHA256(seed ‖ BE64(periodStart))[:2], 15-min period, ±2 lookahead):
+///   https://chromium.googlesource.com/chromium/src/+/a753229/components/cryptauth/raw_eid_generator_impl.cc
+///   https://chromium.googlesource.com/chromium/src.git/+/71.0.3578.128/components/cryptauth/background_eid_generator.cc
 public enum Eid {
     static let periodMs: Int64 = 15 * 60 * 1000
     static let lookahead = 2

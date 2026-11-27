@@ -1,6 +1,11 @@
 import Foundation
 
 /// uWeave: chunking messages into BLE-sized packets. Port of `ble/weave.py`.
+///
+/// Source (packet header bits, connection request/response/close, data framing):
+///   https://chromium.googlesource.com/chromium/src/+/a753229/components/proximity_auth/ble/ble_weave_packet_generator.cc
+///   https://chromium.googlesource.com/chromium/src/+/a753229/components/proximity_auth/ble/ble_weave_packet_receiver.cc
+/// (Later: chromeos/ash/services/secure_channel/ble_weave_packet_{generator,receiver}.cc.)
 enum Weave {
     static let dataType = 0
     static let controlType = 1
