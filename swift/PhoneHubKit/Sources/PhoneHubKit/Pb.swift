@@ -85,6 +85,44 @@ enum Pb {
         }
         return out
     }
+
+    /// Collect every length-delimited occurrence of `field` — for repeated fields
+    /// (e.g. PhoneStatusSnapshot.notifications), which `readFields` would collapse
+    /// to the last one.
+    static func readRepeatedBytes(_ input: Data, _ field: Int) -> [Data] {
+        let data = Data(input)
+        var out: [Data] = []
+        var i = data.startIndex
+        func readVarint() -> UInt64 {
+            var v: UInt64 = 0, s = 0
+            while i < data.endIndex {
+                let b = data[i]; i = data.index(after: i)
+                v |= UInt64(b & 0x7F) << s
+                if b & 0x80 == 0 { break }
+                s += 7
+            }
+            return v
+        }
+        while i < data.endIndex {
+            let key = readVarint()
+            let f = Int(key >> 3), wire = Int(key & 7)
+            if wire == 0 { _ = readVarint() }
+            else if wire == 2 {
+                let len = Int(readVarint())
+                guard len >= 0, data.distance(from: i, to: data.endIndex) >= len else { break }
+                let end = data.index(i, offsetBy: len)
+                if f == field { out.append(Data(data[i..<end])) }
+                i = end
+            } else if wire == 1 {
+                guard data.distance(from: i, to: data.endIndex) >= 8 else { break }
+                i = data.index(i, offsetBy: 8)
+            } else if wire == 5 {
+                guard data.distance(from: i, to: data.endIndex) >= 4 else { break }
+                i = data.index(i, offsetBy: 4)
+            } else { break }
+        }
+        return out
+    }
 }
 
 extension Dictionary where Key == Int, Value == PBField {
@@ -95,5 +133,8 @@ extension Dictionary where Key == Int, Value == PBField {
     func varint(_ field: Int) -> UInt64? {
         if case .varint(let v)? = self[field] { return v }
         return nil
+    }
+    func string(_ field: Int) -> String? {
+        bytes(field).flatMap { String(data: $0, encoding: .utf8) }
     }
 }

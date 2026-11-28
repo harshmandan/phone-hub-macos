@@ -12,7 +12,8 @@ import Foundation
 /// (Later moved to chromeos/ash/services/secure_channel/wire_message.cc, identical.)
 enum WireMessage {
     static let authFeature = "auth"
-    static let versionThree: UInt8 = 3
+    static let versionThree: UInt8 = 3   // header = [3][uint16 len] (≤64KB messages)
+    static let versionFour: UInt8 = 4    // header = [4][uint32 len] (large messages)
 
     static func serialize(payload: Data, feature: String) -> Data {
         let json = "{\"payload\":\"\(payload.base64url)\",\"feature\":\"\(feature)\"}"
@@ -23,10 +24,19 @@ enum WireMessage {
     }
 
     /// Extract the inner payload bytes and the feature from a received
-    /// WireMessage. Returns nil if the framing isn't version 3.
+    /// WireMessage. Handles version 3 ([3][uint16 len]) and version 4
+    /// ([4][uint32 len]) — GMS picks version 4 for large messages (e.g. a Phone
+    /// Hub status snapshot with icons, >64KB), seen over the Nearby medium.
     static func parse(_ data: Data) -> (payload: Data, feature: String)? {
-        guard data.count > 3, data[data.startIndex] == versionThree else { return nil }
-        let body = Data(data.dropFirst(3))
+        guard let first = data.first else { return nil }
+        let headerLen: Int
+        switch first {
+        case versionThree: headerLen = 3   // 1 version + 2 length
+        case versionFour:  headerLen = 5   // 1 version + 4 length
+        default: return nil
+        }
+        guard data.count > headerLen else { return nil }
+        let body = Data(data.dropFirst(headerLen))
         guard let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
               let b64 = obj["payload"] as? String else { return nil }
         var s = b64.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")

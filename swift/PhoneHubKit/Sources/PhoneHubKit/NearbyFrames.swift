@@ -28,11 +28,18 @@ public enum NearbyFrames {
 
     // MARK: builders
 
-    public static func connectionRequest(endpointId: String, endpointInfo: Data, nonce: Int32) -> Data {
+    // offline_wire_formats.proto Medium: BLUETOOTH = 2, WIFI_LAN = 5.
+    static let mediumBluetooth: UInt64 = 2
+    static let mediumWifiLan: UInt64 = 5
+
+    public static func connectionRequest(endpointId: String, endpointInfo: Data, nonce: Int32,
+                                         medium: UInt64 = 2 /* BLUETOOTH */,
+                                         endpointName: String = "Chromebook") -> Data {
         var req = Data()
         req += Pb.bytes(1, Data(endpointId.utf8))     // endpoint_id
+        req += Pb.bytes(2, Data(endpointName.utf8))   // endpoint_name (deprecated but REQUIRED by GMS)
         req += Pb.varint(4, UInt64(bitPattern: Int64(nonce)))  // nonce
-        req += Pb.varint(5, 5 /* WIFI_LAN */)         // mediums
+        req += Pb.varint(5, medium)                   // mediums (repeated; one entry)
         req += Pb.bytes(6, endpointInfo)              // endpoint_info
         let v1 = Pb.varint(1, frameConnectionRequest) + Pb.message(2, req)
         return offlineFrame(v1)
